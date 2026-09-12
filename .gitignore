@@ -1,0 +1,18 @@
+# data and run artefacts never enter git
+outputs/
+data/
+*.pth
+*.onnx
+*.engine
+
+# python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+build/
+dist/
+*.pdf
