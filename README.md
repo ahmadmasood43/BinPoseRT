@@ -32,6 +32,7 @@ not promised ([ADR-0004](docs/adr/0004-two-latency-budgets.md)).
 ## Project documents
 
 - [`docs/DECISIONS.md`](docs/DECISIONS.md) — the single decision record: scope, architecture, milestones, ablations, risks
+- [`docs/MILESTONES.md`](docs/MILESTONES.md) — the dated milestone plan: weekly tasks, exit criteria, slip policy
 - [`CONTEXT.md`](CONTEXT.md) — the project vocabulary (Detection → PoseHypothesis → ObjectTrack → FusedPose)
 - [`docs/adr/`](docs/adr/) — the four hard-to-reverse decisions
 - [`docs/source/`](docs/source/) — the original research plan this project was derived from
