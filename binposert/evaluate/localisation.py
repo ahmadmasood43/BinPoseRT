@@ -9,6 +9,7 @@ AR = mean(AR_VSD, AR_MSSD, AR_MSPD).
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -48,7 +49,10 @@ def evaluate_localisation(
     dataset: BopDataset,
     n_model_points: int = 2000,
     with_vsd: bool = True,
+    targets: Mapping[tuple[int, int], Collection[int] | None] | None = None,
 ) -> LocalisationReport:
+    """``targets`` restricts evaluation to ``{(scene_id, image_id): object_ids or None}`` — the BOP
+    ``test_targets`` subset; ``None`` evaluates every image and object of the split."""
     by_key: dict[tuple[int, int, int], list[PosePrediction]] = defaultdict(list)
     for p in preds:
         by_key[(p.scene_id, p.image_id, p.object_id)].append(p)
@@ -66,61 +70,66 @@ def evaluate_localisation(
     rows: list[dict[str, float]] = []
     vsd_available = False
 
-    for scene_id in dataset.scene_ids:
-        for image_id in dataset.image_ids(scene_id):
-            view, gts = dataset.load_view(scene_id, image_id, load_rgb=False, load_depth=with_vsd)
-            for object_id in sorted({g.object_id for g in gts}):
-                gts_obj = [g for g in gts if g.object_id == object_id]
-                valid = [g for g in gts_obj if not (g.visible_fraction < MIN_VISIB)]
-                if not valid:
-                    continue
-                model = dataset.load_model(object_id)
-                if object_id not in pts_cache:
-                    pts_cache[object_id] = model.sample_points(n_model_points, seed=object_id)
-                    renderers[object_id] = MeshRenderer.from_model(model)
-                pts = pts_cache[object_id]
-                cand = sorted(
-                    by_key.get((scene_id, image_id, object_id), []), key=lambda p: -p.score
-                )
-                cand = cand[: len(gts_obj)]
-                width = view.image_size[1]
-                thr_mssd = np.asarray(MSSD_THRESH * model.diameter, dtype=np.float64)
-                thr_mspd = np.asarray(MSPD_THRESH * (width / 640.0), dtype=np.float64)
-                taus = np.asarray(VSD_TAUS * model.diameter, dtype=np.float64)
-                use_vsd = with_vsd and view.depth is not None
+    if targets is None:
+        image_keys = [(s, i) for s in dataset.scene_ids for i in dataset.image_ids(s)]
+    else:
+        image_keys = sorted(targets)
+    for scene_id, image_id in image_keys:
+        view, gts = dataset.load_view(scene_id, image_id, load_rgb=False, load_depth=with_vsd)
+        wanted = targets.get((scene_id, image_id)) if targets is not None else None
+        object_ids = sorted({g.object_id for g in gts})
+        if wanted is not None:
+            object_ids = [o for o in object_ids if o in set(wanted)]
+        for object_id in object_ids:
+            gts_obj = [g for g in gts if g.object_id == object_id]
+            valid = [g for g in gts_obj if not (g.visible_fraction < MIN_VISIB)]
+            if not valid:
+                continue
+            model = dataset.load_model(object_id)
+            if object_id not in pts_cache:
+                pts_cache[object_id] = model.sample_points(n_model_points, seed=object_id)
+                renderers[object_id] = MeshRenderer.from_model(model)
+            pts = pts_cache[object_id]
+            cand = sorted(by_key.get((scene_id, image_id, object_id), []), key=lambda p: -p.score)
+            cand = cand[: len(gts_obj)]
+            width = view.image_size[1]
+            thr_mssd = np.asarray(MSSD_THRESH * model.diameter, dtype=np.float64)
+            thr_mspd = np.asarray(MSPD_THRESH * (width / 640.0), dtype=np.float64)
+            taus = np.asarray(VSD_TAUS * model.diameter, dtype=np.float64)
+            use_vsd = with_vsd and view.depth is not None
 
-                e_mssd = np.full((len(cand), len(valid)), np.inf)
-                e_mspd = np.full((len(cand), len(valid)), np.inf)
-                e_vsd = np.full((len(cand), len(valid), len(taus)), np.inf)
-                for i, p in enumerate(cand):
-                    for j, g in enumerate(valid):
-                        e_mssd[i, j] = mssd(
-                            p.T_camera_object, g.T_camera_object, pts, model.symmetry
+            e_mssd = np.full((len(cand), len(valid)), np.inf)
+            e_mspd = np.full((len(cand), len(valid)), np.inf)
+            e_vsd = np.full((len(cand), len(valid), len(taus)), np.inf)
+            for i, p in enumerate(cand):
+                for j, g in enumerate(valid):
+                    e_mssd[i, j] = mssd(p.T_camera_object, g.T_camera_object, pts, model.symmetry)
+                    e_mspd[i, j] = mspd(
+                        p.T_camera_object, g.T_camera_object, pts, model.symmetry, view.K
+                    )
+                    if use_vsd:
+                        assert view.depth is not None
+                        e_vsd[i, j] = vsd(
+                            p.T_camera_object,
+                            g.T_camera_object,
+                            renderers[object_id],
+                            view.depth,
+                            view.K,
+                            tau_mm=taus,
                         )
-                        e_mspd[i, j] = mspd(
-                            p.T_camera_object, g.T_camera_object, pts, model.symmetry, view.K
-                        )
-                        if use_vsd:
-                            assert view.depth is not None
-                            e_vsd[i, j] = vsd(
-                                p.T_camera_object,
-                                g.T_camera_object,
-                                renderers[object_id],
-                                view.depth,
-                                view.K,
-                                tau_mm=taus,
-                            )
 
-                tp_mssd[object_id] += _true_positives(e_mssd, thr_mssd)
-                tp_mspd[object_id] += _true_positives(e_mspd, thr_mspd)
-                if use_vsd:
-                    vsd_available = True
-                    for k in range(len(taus)):
-                        tp_vsd[object_id][k] += _true_positives(e_vsd[:, :, k], VSD_THRESH)
-                n_valid[object_id] += len(valid)
-                rows.extend(
-                    _gt_rows(scene_id, image_id, object_id, valid, e_mssd, e_mspd, model.diameter)
+            tp_mssd[object_id] += _true_positives(e_mssd, thr_mssd)
+            tp_mspd[object_id] += _true_positives(e_mspd, thr_mspd)
+            if use_vsd:
+                vsd_available = True
+                for k in range(len(taus)):
+                    tp_vsd[object_id][k] += _true_positives(e_vsd[:, :, k], VSD_THRESH)
+            n_valid[object_id] += len(valid)
+            rows.extend(
+                _gt_rows(
+                    scene_id, image_id, object_id, valid, e_mssd, e_mspd, model.diameter, width
                 )
+            )
 
     per_object: dict[int, dict[str, float]] = {}
     for oid, n in n_valid.items():
@@ -174,7 +183,13 @@ def _gt_rows(
     e_mssd: npt.NDArray[np.float64],
     e_mspd: npt.NDArray[np.float64],
     diameter: float,
+    image_width: int,
 ) -> list[dict[str, float]]:
+    """Per-GT rows for stratified analysis. ``mssd_ar`` / ``mspd_ar`` are the fractions of BOP
+    thresholds passed by the *closest* candidate (not the greedy match), so bin averages of them
+    approximate — and for one candidate per GT equal — the pooled recall."""
+    thr_mssd = MSSD_THRESH * diameter
+    thr_mspd = MSPD_THRESH * (image_width / 640.0)
     rows = []
     for j, g in enumerate(valid):
         best = float(e_mssd[:, j].min()) if e_mssd.shape[0] else float("inf")
@@ -186,8 +201,11 @@ def _gt_rows(
                 "object_id": object_id,
                 "gt_index": g.gt_index,
                 "visible_fraction": g.visible_fraction,
+                "diameter": diameter,
                 "mssd_mm": best,
                 "mspd_px": best_p,
+                "mssd_ar": float(np.mean(best < thr_mssd)),
+                "mspd_ar": float(np.mean(best_p < thr_mspd)),
                 "success_0.1d": float(best < 0.1 * diameter),
             }
         )

@@ -15,3 +15,8 @@ __pycache__/
 .pytest_cache/
 build/
 dist/
+
+# bop_toolkit checkout + env created by tools/bop_eval.sh (D15)
+.bop_toolkit/
+.venv-bop_toolkit/
+run.log

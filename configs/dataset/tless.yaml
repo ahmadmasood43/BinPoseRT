@@ -1,0 +1,9 @@
+# T-LESS, BOP'19 test subset (1000 images over 20 scenes), evaluated on models_eval like bop_toolkit.
+name: tless
+root: data/bop/tless
+split: test_primesense
+models_dir: models_eval
+targets: test_targets_bop19.json
+scene_ids: null           # e.g. [1] for a smoke run
+image_ids: null
+max_images_per_scene: null

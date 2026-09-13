@@ -1,0 +1,13 @@
+# Only pyproject/README/LICENSE, binposert/ and adapters/ are COPY'd; keep the context small.
+data/
+outputs/
+.venv/
+.venv-bop_toolkit/
+.bop_toolkit/
+.git/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+tests/
+docs/
+**/__pycache__/

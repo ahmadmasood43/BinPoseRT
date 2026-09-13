@@ -1,0 +1,15 @@
+# CNOS (SAM/FastSAM + DINOv2 template matching), GPU only, consumed from cache (D4).
+# `variant: bop23_default` imports the official BOP'23 default detections (cnos-fastsam) — no GPU
+# needed; `variant: run` runs the pinned upstream repo inside docker/cnos/.
+name: cnos
+impl: gpu
+version: "1"
+variant: bop23_default
+upstream:
+  repo: https://github.com/nv-nguyen/cnos
+  commit: 298d1f3366171464ca271659f0e2f7a6eb8e39b4
+  detections_url: https://bop.felk.cvut.cz/media/data/bop_datasets_extra/bop23_default_detections_for_task4.zip
+run:                      # only used with variant: run
+  model: cnos_fast        # cnos (SAM) | cnos_fast (FastSAM)
+  rendering_type: pyrender
+  level_templates: 0

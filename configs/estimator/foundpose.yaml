@@ -1,0 +1,30 @@
+# FoundPose coarse stage (the public release has no featuremetric refinement), GPU only (D3).
+# `opts` mirror FoundPose's InferOpts and are passed through by adapters/foundpose_cli.py.
+name: foundpose
+impl: gpu
+version: "1"
+upstream:
+  repo: https://github.com/facebookresearch/foundpose
+  commit: 3103473bfa3985fdf563bb31cefc0cae8f979ae0
+checkpoints:
+  extractor: dinov2_vits14-reg   # downloaded by torch.hub inside the container
+opts:
+  extractor_name: dinov2_version=vits14-reg_stride=14_facet=token_layer=9_logbin=0_norm=1
+  grid_cell_size: 14.0
+  crop_rel_pad: 0.2
+  crop_size: [420, 420]
+  match_template_type: tfidf
+  match_top_n_templates: 5
+  match_feat_matching_type: cyclic_buddies
+  match_top_k_buddies: 300
+  pnp_type: opencv
+  pnp_ransac_iter: 400
+  pnp_inlier_thresh: 10.0
+  final_pose_type: best_coarse
+  num_preds_factor: 1
+templates:                # gen_templates / gen_repre options (once per dataset)
+  num_viewspheres: 1
+  min_num_viewpoints: 57
+  num_inplane_rotations: 14
+  pca_components: 256
+  cluster_num: 2048

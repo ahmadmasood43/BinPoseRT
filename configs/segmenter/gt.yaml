@@ -1,0 +1,5 @@
+# Ground-truth visible masks (BOP mask_visib): the A0 upper bound (D4).
+name: gt
+impl: local
+version: "1"
+min_visible_fraction: 0.0

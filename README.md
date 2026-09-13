@@ -6,8 +6,9 @@ Given one or more calibrated RGB-D views of a cluttered bin and CAD models of th
 returns, for every visible physical object, a world-frame pose `T_world_object`, a **calibrated
 confidence** that the pose is correct, and a **verdict** (`accept` / `reject` / `request_view`).
 
-> Status: **Foundations complete** (increment 1 of 6). No results yet — see [docs/DECISIONS.md](docs/DECISIONS.md)
-> for the milestone plan. Numbers in this README will only ever come from `outputs/`.
+> Status: **Alpha in progress** (increment 2 of 6): the laptop-side pipeline, adapters and configs are done;
+> the GPU runs that produce the first numbers are not. See [docs/MILESTONES.md](docs/MILESTONES.md).
+> Numbers in this README will only ever come from `outputs/`.
 
 ## What it does
 
@@ -46,12 +47,31 @@ uv run pytest -q
 ```
 
 No GPU, CUDA or Docker is needed to develop and test the core. Neural estimators run in their own Docker
-images on a GPU machine (`docker/`, from increment 2) and their outputs are cached under `outputs/`.
+images on a GPU machine (`docker/`) and their outputs are cached under `outputs/`.
+
+## Running an experiment
+
+One ablation row is one command; every run writes a BOP CSV, `run_manifest.json`, `report.{json,md}`
+(AR, per-object AR, AR by visibility bin) and a failure gallery under `outputs/`:
+
+```bash
+uv run python tools/run.py experiment=smoke                 # CPU end-to-end on the committed fixture
+uv run python tools/run.py experiment=A0 dataset=tless      # GT masks · FoundPose
+uv run python tools/run.py experiment=A1 dataset=tless      # CNOS masks · FoundPose
+uv run python tools/run.py experiment=A5 dataset=tless      # CNOS masks · MegaPose
+```
+
+Stages are cached by content hash (`outputs/<dataset>/<split>/<stage>/<hash>/`). When a GPU stage is not
+cached the run stops, leaves an `adapter_request.json` and prints the adapter command to run inside the
+matching container on the GPU machine ([docker/README.md](docker/README.md)); `rsync outputs/` back and
+re-run. `tools/bop_eval.sh <csv>` produces the official `bop_toolkit` numbers.
 
 ## Datasets
 
-BOP format throughout. `tools/download_bop.py` fetches T-LESS models; large datasets (XYZ-IBD, IPD) are
-downloaded on the GPU machines only.
+BOP format throughout. `uv run python tools/download_bop.py tless --parts base models test_primesense_bop19`
+fetches the T-LESS BOP'19 test subset (1000 images, 0.9 GB) used by every T-LESS experiment; large datasets
+(XYZ-IBD, IPD) are downloaded on the GPU machines only. `tools/sync.sh` moves `data/` and `outputs/`
+between the laptop and a GPU machine (code travels through git).
 
 ## Project structure
 

@@ -1,0 +1,7 @@
+# @package _global_
+# A0 — GT masks · FoundPose coarse · single view: the upper-bound baseline (DECISIONS.md §4).
+defaults:
+  - override /segmenter: gt
+  - override /estimator: foundpose
+
+experiment: A0

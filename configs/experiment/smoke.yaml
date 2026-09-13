@@ -1,0 +1,9 @@
+# @package _global_
+# smoke — GT masks · synthetic estimator on the mini fixture: the CPU end-to-end check (D16).
+defaults:
+  - override /segmenter: gt
+  - override /estimator: synthetic
+
+experiment: smoke
+evaluate:
+  n_model_points: 500

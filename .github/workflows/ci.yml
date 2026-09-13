@@ -19,4 +19,4 @@ jobs:
       - run: uv run mypy binposert
       - run: uv run pytest -q -m "not gpu"
       - name: core imports without torch
-        run: uv run python -c "import sys, binposert.evaluate, binposert.render, binposert.data; assert 'torch' not in sys.modules"
+        run: uv run python -c "import sys, binposert.evaluate, binposert.render, binposert.data, binposert.pipeline, binposert.segment, binposert.pose, binposert.viz, binposert.artefacts; assert 'torch' not in sys.modules"

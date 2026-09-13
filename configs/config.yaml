@@ -1,0 +1,34 @@
+# Primary Hydra config. One ablation row = `tools/run.py experiment=A<n> dataset=<d>` (D12).
+# Group directories are singular so the CLI reads `experiment=A0 dataset=tless`.
+defaults:
+  - dataset: mini_bop
+  - segmenter: gt
+  - estimator: synthetic
+  - _self_
+  - experiment: null
+  - override hydra/job_logging: none   # tools/run.py configures logging; no run.log in the cwd
+
+experiment: null          # set by configs/experiment/*.yaml
+outputs_root: outputs
+seed: 0
+
+pipeline:
+  stages: [segment, coarse_pose, evaluate]
+  stop_after: null        # e.g. coarse_pose
+  plan_only: false        # print the stage plan (hashes, directories, cache state) and exit
+
+evaluate:
+  version: "1"
+  n_model_points: 2000
+  with_vsd: true
+  score_field: pose_score   # falls back to seg_score, then 1.0
+  top_k_per_detection: 1
+  visibility_bins: [0.10, 0.30, 0.60, 1.00]
+  gallery_n_worst: 20       # 0 disables the failure gallery
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  job:
+    chdir: false

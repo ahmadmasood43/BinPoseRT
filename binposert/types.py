@@ -241,3 +241,52 @@ class FusedPose:
     confidence: float
     verdict: Verdict
     signals: QualitySignals = field(default_factory=QualitySignals)
+
+
+# ----------------------------------------------------------------------------- artefact schema
+# Frozen column lists for the Parquet tables that stages exchange on disk (D12). Adapters running
+# inside the estimator containers write these; readers validate against them. Bump
+# ``ARTEFACT_SCHEMA_VERSION`` whenever a column is added, removed or its meaning changes, and note
+# it in DECISIONS.md D12.
+
+ARTEFACT_SCHEMA_VERSION = 1
+
+POSE_COLUMNS = tuple(f"T{i}{j}" for i in range(4) for j in range(4))
+"""Row-major flattening of ``T_camera_object`` (mm), 16 float64 columns ``T00`` … ``T33``."""
+
+DETECTION_COLUMNS: tuple[str, ...] = (
+    "scene_id",  # int64  BOP scene id
+    "image_id",  # int64  BOP image id
+    "camera_id",  # str    View.camera_id (== f"{image_id:06d}" for BOP)
+    "object_id",  # int64
+    "detection_id",  # int64  unique within the View
+    "score",  # float64 segmentation score in [0, 1]
+    "bbox_x",  # int64  tight box of the mask, pixels
+    "bbox_y",
+    "bbox_w",
+    "bbox_h",
+    "mask_path",  # str    PNG (0 / 255) relative to the artefact directory
+    "source",  # str    segmenter name, e.g. "gt", "cnos-fastsam"
+    "time_s",  # float64 wall time the segmenter needed for the whole image (NaN = unknown)
+)
+
+POSE_HYPOTHESIS_COLUMNS: tuple[str, ...] = (
+    "scene_id",
+    "image_id",
+    "camera_id",
+    "object_id",
+    "detection_id",
+    "hypothesis_id",  # int64  unique within (camera_id, detection_id)
+    "stage",  # str    Stage value: "coarse" | "refined"
+    "source",  # str    estimator / refiner name
+    "rejection_reason",  # str    "" when not rejected
+    *POSE_COLUMNS,
+    "time_s",  # float64 wall time for the whole image, all detections (NaN = unknown)
+    *QualitySignals.field_names(),
+)
+
+MASK_FILENAME = "masks/{scene_id:06d}_{image_id:06d}_{detection_id:06d}.png"
+DETECTIONS_FILE = "detections.parquet"
+POSE_HYPOTHESES_FILE = "pose_hypotheses.parquet"
+META_FILE = "meta.json"
+SUCCESS_MARKER = "_SUCCESS"

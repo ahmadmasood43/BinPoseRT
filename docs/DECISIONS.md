@@ -55,6 +55,12 @@ Research questions (from the PDF, kept verbatim in spirit):
 - No third estimator (FoundationPose, SAM-6D) before milestone Delta is complete; if added later it is a
   comparator row only.
 - Each estimator lives in its own container on the GPU machine (D15); the core consumes cached outputs.
+- Found during Alpha (2026-09-13): the public FoundPose release (`3103473b`) is the *coarse* pipeline only
+  (no featuremetric refinement), which is exactly the `stage=coarse` input Beta consumes; its `score` is a
+  many-to-many inlier ratio and is cached as `pose_score`. The MegaPose adapter caches *all* scored
+  hypotheses of `megapose-1.0-RGB-multi-hypothesis` (coarse classifier → MegaPose's own RGB refiner →
+  scorer) as `stage=coarse`; depth is never given to it, so Beta's depth Refinement is the only depth user.
+  Adapters run the upstream scripts unchanged and only convert formats (`adapters/*_cli.py`).
 
 ### D4 — Segmentation: ground-truth masks + CNOS; trained fast segmenter deferred
 - `Segmenter` plugin interface: `(rgb, K, object_ids) → list[Detection]`.
@@ -62,6 +68,12 @@ Research questions (from the PDF, kept verbatim in spirit):
   matching; GPU only; outputs cached).
 - A trained lightweight instance segmenter is stretch — needed only for the deployment / latency branch
   (ablations A10, A11).
+- Alpha (2026-09-13): the `Segmenter` signature takes the `View` (rgb, `K` and the BOP ids together) —
+  `segment(view, object_ids) → list[Detection]`. "CNOS" means the **official BOP'23 default detections**
+  (`cnos-fastsam_<dataset>-test.json`, the same file FoundPose and most zero-shot entries use) imported by
+  `adapters/cnos_cli.py` without a GPU (`segmenter.variant=bop23_default`); running the pinned CNOS repo
+  (`variant=run`, `docker/cnos/`) produces the same JSON format and is kept for datasets without official
+  detections (XYZ-IBD). Detection ids are the rank by score within an image; GT detections use `gt_index`.
 
 ### D5 — Datasets: T-LESS + XYZ-IBD must-have; ITODD-MV and IPD stretch
 - **T-LESS** — development/debug set: single-view, 30 symmetric textureless objects, public GT, small.
@@ -73,7 +85,9 @@ Research questions (from the PDF, kept verbatim in spirit):
   scene (`cam_R_w2c`/`cam_t_w2c`), so T-LESS is usable for multi-view experiments too by selecting
   several image_ids of one scene. XYZ-IBD remains the multi-view centrepiece; T-LESS becomes the
   multi-view *debug* set.
-- The laptop holds only T-LESS subsets and the committed mini fixture.
+- The laptop holds only T-LESS subsets and the committed mini fixture. Alpha: the HF mirror ships
+  `tless_test_primesense_bop19.zip` (0.83 GB) — exactly the 1000 BOP'19 target images — so the laptop
+  carries the full evaluation subset and only estimator inference needs the GPU machine.
 
 ### D6 — Language split: Python first; C++ only for *measured* hot paths, after Delta  → [ADR-0001](adr/0001-python-first-cpp-after-profiling.md)
 - Foundations → Delta entirely in Python (NumPy, SciPy, Open3D, OpenCV, scikit-learn).
@@ -144,9 +158,28 @@ Defined in [`CONTEXT.md`](../CONTEXT.md). Non-negotiable rules:
   floats, QualitySignals as columns); masks as PNG; BOP CSV from `evaluate`.
 - GPU stages (`segment` = CNOS, `coarse_pose` = FoundPose / MegaPose) run remotely; their output
   directories are rsync'd to the laptop and every downstream stage runs locally.
-- Configuration: Hydra. One `configs/experiments/A<n>.yaml` per ablation row.
+- Configuration: Hydra. One `configs/experiment/A<n>.yaml` per ablation row.
 - Every run writes `run_manifest.json`: git commit, config hash, dataset version, object/camera subset,
   checkpoints, GPU/CPU, CUDA version, seed, per-stage timings, peak memory.
+- Implemented in Alpha (2026-09-13), `binposert/pipeline/` + `binposert/artefacts.py`:
+  - The table schemas are frozen as column lists in `types.py` (`DETECTION_COLUMNS`,
+    `POSE_HYPOTHESIS_COLUMNS`, `ARTEFACT_SCHEMA_VERSION = 1`); `artefacts.py` holds the writers / readers
+    and imports only numpy · pandas · imageio so the estimator containers install the core with
+    `pip install --no-deps`. Readers refuse a directory without `_SUCCESS` or with missing columns.
+  - `hash = sha256({stage, version, config, dataset identity, upstream hashes})[:16]`. Dataset identity
+    is `{name, split, models_dir, targets, scene_ids, image_ids, max_images_per_scene}`; keys named `root`
+    or starting with `_` never enter a hash, so a cache produced on the GPU machine keys identically on the
+    laptop. A stage directory without `_SUCCESS` is wiped and re-run.
+  - GPU stages (`impl: gpu`) are never executed by the runner: it writes `adapter_request.json` into the
+    planned directory, prints the adapter command and exits with code 2. The adapter fills the directory
+    from that request (dataset identity, image keys, object targets, upstream dirs) and the run resumes
+    after `rsync`. `evaluate` consumes `pose_hypotheses` from the *latest* stage producing them, so
+    `refine` slots in without touching the evaluator.
+  - Every run also writes `outputs/<dataset>/<split>/runs/<experiment>/<stamp>/` with
+    `run_manifest.json`, `report.{json,md}` and the BOP CSV under bop_toolkit's naming rule
+    `<method>_<dataset>-<split>.csv` (method = `<experiment>-<segmenter>-<estimator>`).
+  - Datasets are covered through BOP `test_targets_bop19.json` when the dataset config names one
+    (T-LESS: 1000 images), optionally narrowed by `scene_ids` / `image_ids` / `max_images_per_scene`.
 
 ### D13 — Latency: two explicit budgets, numbers over adjectives  → [ADR-0004](adr/0004-two-latency-budgets.md)
 - **Full pipeline** (`segment` → `confidence`, one Scene, all objects): measured on one documented GPU
@@ -208,11 +241,13 @@ Defined in [`CONTEXT.md`](../CONTEXT.md). Non-negotiable rules:
 BinPoseRT/
 ├── README.md  CONTEXT.md  LICENSE  pyproject.toml  uv.lock
 ├── docs/            DECISIONS.md  adr/  source/  report/ (later)
-├── configs/         datasets/ segmenters/ estimators/ refiners/ fusion/ confidence/ nbv/
-│                    experiments/A0..A9.yaml  benchmark.yaml
+├── configs/         config.yaml  dataset/ segmenter/ estimator/ refiner/ fusion/ confidence/ nbv/
+│                    experiment/A0..A9.yaml smoke.yaml  benchmark.yaml   (singular group names so the
+│                    CLI reads `experiment=A0 dataset=tless`)
 ├── binposert/       core package (CPU-only imports)
 │   ├── types.py         View, Scene, ObjectModel, SymmetryGroup, Detection, PoseHypothesis,
-│   │                    QualitySignals, ObjectTrack, FusedPose, Verdict            (D7)
+│   │                    QualitySignals, ObjectTrack, FusedPose, Verdict + artefact schema  (D7, D12)
+│   ├── artefacts.py     Parquet/PNG writers and validating readers, BOP RLE codec        (D12)
 │   ├── transforms.py    SE(3)/so(3) helpers, T_a_b convention, log/exp, distances
 │   ├── data/            BOP loader, ObjectModel onboarding, BOP writer
 │   ├── render/          Open3D RaycastingScene depth/silhouette renderer          (D8)
@@ -224,11 +259,11 @@ BinPoseRT/
 │   ├── confidence/      QualitySignals schema, Model H / F, calibration metrics    (D11)
 │   ├── active/          NBV scoring + loop                                          (D14)
 │   ├── pipeline/        stages, cache, run manifest, Hydra entry                    (D12)
-│   ├── evaluate/        BOP CSV writer, bop_toolkit wrapper, stratified reports, plots
+│   ├── evaluate/        BOP CSV writer, localisation protocol, stratified reports
 │   └── viz/             overlays, failure galleries, grasp-pose visualisation
-├── adapters/        cnos_cli.py  foundpose_cli.py  megapose_cli.py   (run inside docker/, GPU)
-├── docker/          cnos/  foundpose/  megapose/                                    (D15)
-├── tools/           download_bop.py  make_mini_bop.py  run.py  benchmark.py  plot.py
+├── adapters/        _common.py  cnos_cli.py  foundpose_cli.py  megapose_cli.py  (docker/, GPU)
+├── docker/          README.md  cnos/  foundpose/  megapose/                          (D15)
+├── tools/           download_bop.py  make_mini_bop.py  run.py  bop_eval.sh  benchmark.py  plot.py
 ├── tests/           synth/  fixtures/mini_bop/  test_*.py                           (D16)
 └── outputs/         (git-ignored) <dataset>/<split>/<stage>/<hash>/
 ```
@@ -306,7 +341,7 @@ onboarding tool · benchmark scripts (one command per ablation) · results CSV/J
 | Increment | Status | Notes |
 |---|---|---|
 | 1 Foundations | **done 2026-09-12** | 30 tests, < 5 s, CPU only; `types`, `transforms`, `symmetry`, `render`, `data`, `evaluate` |
-| 2 Alpha | not started | |
+| 2 Alpha | **in progress** — laptop side done 2026-09-13, GPU side pending | `artefacts`, `segment`, `pose`, `pipeline`, `viz`, stratified report, `configs/`, `tools/run.py`, `tools/bop_eval.sh`, three adapters + Dockerfiles, 44 tests < 30 s. Waiting on: Docker builds, T-LESS FoundPose / MegaPose runs, official toolkit numbers, A0/A1/A5 table |
 | 3 Beta | not started | |
 | 4 Gamma | not started | |
 | 5 Delta | not started | |
@@ -316,3 +351,7 @@ onboarding tool · benchmark scripts (one command per ablation) · results CSV/J
 - 2026-09-12 — initial record, D1–D19.
 - 2026-09-12 — Foundations increment complete; D5 (T-LESS multi-view note), D8 (pixel convention), D16 (fixture facts) updated from implementation.
 - 2026-09-12 — D15: bop_toolkit moved out of core deps (numpy<2 / opencv conflict); metrics reimplemented in core, official eval in a separate env.
+- 2026-09-13 — Alpha laptop side: D3 (FoundPose is coarse-only, MegaPose hypotheses cached), D4 (official
+  BOP'23 CNOS detections imported instead of run; `Segmenter` takes a View), D12 (frozen artefact schema,
+  hash rules, `adapter_request.json` handshake, run directory), D18 (`configs/` groups singular,
+  `artefacts.py`) updated from implementation.

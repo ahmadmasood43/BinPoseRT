@@ -1,0 +1,8 @@
+# Ground truth + seeded noise: CPU stand-in with a known error (pipeline tests, Beta error sweeps).
+name: synthetic
+impl: local
+version: "1"
+sigma_t_mm: 5.0
+sigma_rot_deg: 5.0
+n_hypotheses: 1
+seed: 0

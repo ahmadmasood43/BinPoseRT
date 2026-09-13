@@ -18,7 +18,7 @@ anything slips. Finalisation is protected: it never shrinks to absorb overrun.
 | # | Milestone | Weeks | Planned dates | Runs on | Ablations | Status |
 |---|---|---|---|---|---|---|
 | 1 | **Foundations** | 0 | — 2026-09-12 | laptop | — | **done 2026-09-12** |
-| 2 | **Alpha** — baseline | 1–3 | 2026-09-14 → 2026-10-04 | GPU (adapters once), then laptop | A0, A1, A5 | not started |
+| 2 | **Alpha** — baseline | 1–3 | 2026-09-14 → 2026-10-04 | GPU (adapters once), then laptop | A0, A1, A5 | **in progress** — laptop side done 2026-09-13 |
 | 3 | **Beta** — refinement | 4–6 | 2026-10-05 → 2026-10-25 | laptop | A2, A3, A4 | not started |
 | 4 | **Gamma** — multi-view | 7–9 | 2026-10-26 → 2026-11-15 | laptop (cached GPU outputs) | A6, A7 | not started |
 | 5 | **Delta** — reliability | 10–12 | 2026-11-16 → 2026-12-06 | laptop | A8 | not started |
@@ -100,28 +100,50 @@ MegaPose, consumed by a reproducible local pipeline that yields a deterministic 
 ### Tasks
 
 Week 1 — GPU side (start immediately; laptop tasks run in parallel while images build)
-- [ ] `docker/cnos/`, `docker/foundpose/`, `docker/megapose/`: one Dockerfile each, upstream commit pinned (D15)
-- [ ] `adapters/cnos_cli.py`, `foundpose_cli.py`, `megapose_cli.py`: read BOP, write D12 artefacts
+- [x] `docker/cnos/`, `docker/foundpose/`, `docker/megapose/`: one Dockerfile each, upstream commit pinned (D15)
+      — *written 2026-09-13, not yet built* (no Docker on the laptop)
+- [x] `adapters/cnos_cli.py`, `foundpose_cli.py`, `megapose_cli.py`: read BOP, write D12 artefacts
       (Detections → masks PNG + Parquet; PoseHypotheses → Parquet with `stage=coarse` and QualitySignals)
+      — the CNOS importer and the FoundPose collector are tested on the fixture; the upstream-run paths
+      (`gen_templates`/`gen_repre`/`infer.py`, MegaPose inference) are exercised on the GPU machine only
 - [ ] Download T-LESS test split + models on the GPU machine; smoke-run each adapter on one scene
 - [ ] Full T-LESS runs: CNOS, FoundPose (GT masks and CNOS masks), MegaPose (CNOS masks); rsync to laptop
 
-Week 2 — Laptop side
-- [ ] `binposert/segment/`: `Segmenter` interface, `GroundTruthSegmenter`, CNOS cache reader (D4)
-- [ ] `binposert/pose/`: `PoseEstimator` interface, FoundPose / MegaPose cache readers (D3)
-- [ ] `binposert/pipeline/`: stage DAG, content-addressed cache with `_SUCCESS`, `run_manifest.json`,
-      Hydra entry `tools/run.py` (D12)
-- [ ] `configs/`: `datasets/tless.yaml`, `segmenters/`, `estimators/`, `experiments/A0.yaml A1.yaml A5.yaml`
-- [ ] Tests: cache hash stability (same inputs → same hash, config change → new hash), stage skip on
-      `_SUCCESS`, adapter output schema round-trips through the readers, mini-fixture end-to-end via `run.py`
+Week 2 — Laptop side ✅ 2026-09-13
+- [x] `binposert/segment/`: `Segmenter` interface, `GroundTruthSegmenter`, CNOS cache reader (D4)
+- [x] `binposert/pose/`: `PoseEstimator` interface, FoundPose / MegaPose cache readers (D3) + the
+      `synthetic` (GT + seeded noise) estimator that makes every downstream stage testable on CPU
+- [x] `binposert/pipeline/`: stage DAG, content-addressed cache with `_SUCCESS`, `run_manifest.json`,
+      Hydra entry `tools/run.py` (D12); GPU stages stop the run with an `adapter_request.json`
+- [x] `configs/`: `dataset/tless.yaml`, `segmenter/`, `estimator/`, `experiment/A0.yaml A1.yaml A5.yaml`
+      (+ `smoke.yaml` for the fixture)
+- [x] Tests: cache hash stability (same inputs → same hash, config change → new hash), stage skip on
+      `_SUCCESS`, adapter output schema round-trips through the readers, mini-fixture end-to-end via `run.py`,
+      bit-identical re-runs, CNOS import, FoundPose collect — 44 tests, < 30 s
 
 Week 3 — Results and closure
-- [ ] `tools/bop_eval.sh`: official `bop_toolkit` evaluation in its own env on the GPU machine (D15)
+- [x] `tools/bop_eval.sh`: official `bop_toolkit` evaluation in its own env on the GPU machine (D15)
+      — *written, not yet run*
 - [ ] A0 / A1 / A5 on T-LESS: BOP AR (VSD/MSSD/MSPD) from core metrics **and** official toolkit; agree within
       tolerance or the discrepancy is explained in `outputs/`
-- [ ] First stratified report: AR by visibility bin [0.10, 0.30), [0.30, 0.60), [0.60, 1.00]
-- [ ] `binposert/viz/`: pose overlay renderer; first failure gallery (worst 20 by MSSD)
-- [ ] Update DECISIONS.md increment status; note any adapter quirks under D3/D4
+- [x] First stratified report: AR by visibility bin [0.10, 0.30), [0.30, 0.60), [0.60, 1.00]
+      (`evaluate/stratified.py`, written by every run as `report.md`; T-LESS numbers pending)
+- [x] `binposert/viz/`: pose overlay renderer; first failure gallery (worst 20 by MSSD)
+      (`gallery_worst_mssd.png` written by every run; T-LESS gallery pending)
+- [x] Update DECISIONS.md increment status; note any adapter quirks under D3/D4
+
+GPU session checklist (the only open items — in this order, each is one command, see `docker/README.md`):
+1. `git pull`; `tools/sync.sh push-data user@gpu` (T-LESS bop19 subset, 0.9 GB) and
+   `tools/sync.sh push-outputs user@gpu` (the CNOS detections already imported on the laptop, A1's
+   `segment` stage); `docker build` the three images (`docker/README.md`).
+2. `uv run python tools/run.py experiment=A0 dataset=tless dataset.scene_ids=[1] dataset.max_images_per_scene=5`
+   → run the printed `foundpose_cli.py` command in `binposert/foundpose` → re-run → first AR (smoke).
+3. Same without the subset for A0; then A1 (segment stage is cached; FoundPose on CNOS masks) and A5
+   (`megapose_cli.py`, needs `python -m megapose.scripts.download --megapose_models` once).
+4. `tools/bop_eval.sh outputs/tless/test_primesense/runs/A0/<stamp>/A0-gt-foundpose_tless-test.csv` for each
+   row; compare with `report.json`.
+5. Back on the laptop: `tools/sync.sh pull-outputs user@gpu`, re-run the three experiments (everything
+   cached → instant), fill the A0/A1/A5 table from `outputs/tless/test_primesense/runs/`.
 
 ### Exit criterion
 `tools/run.py experiment=A0 dataset=tless` yields a BOP CSV and deterministic AR from cached FoundPose
@@ -391,3 +413,4 @@ Decided up front so it is not decided under pressure:
 | Date | Event |
 |---|---|
 | 2026-09-12 | Foundations closed. Plan written. |
+| 2026-09-13 | Alpha laptop side complete (schema, segment/pose/pipeline/viz, configs, run.py, adapters, Dockerfiles, 44 tests). A1 `segment` stage produced for real: BOP'23 CNOS detections imported for the 1000 T-LESS bop19 images (14 198 detections). GPU side (image builds, FoundPose/MegaPose runs, official numbers) open. |

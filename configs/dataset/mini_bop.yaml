@@ -1,0 +1,9 @@
+# The committed 0.2 MB fixture (D16): 2 scenes x 2 Views x 3 objects.
+name: mini_bop
+root: tests/fixtures/mini_bop
+split: test
+models_dir: models
+targets: null             # every image and object
+scene_ids: null
+image_ids: null
+max_images_per_scene: null

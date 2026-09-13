@@ -1,0 +1,17 @@
+# MegaPose render-and-compare comparator (D3, A5), GPU only. All scored hypotheses of the
+# multi-hypothesis RGB model are cached as stage=coarse; depth is never used here (our Beta stage
+# is the depth refiner under test).
+name: megapose
+impl: gpu
+version: "1"
+upstream:
+  repo: https://github.com/megapose6d/megapose6d
+  commit: f3b8e1247f133f3d098833a251b8f2d744c03e1f
+checkpoints:
+  model: megapose-1.0-RGB-multi-hypothesis
+  coarse_run_id: coarse-rgb-906902141
+  refiner_run_id: refiner-rgb-653307694
+opts:
+  n_pose_hypotheses: 5
+  n_refiner_iterations: 5
+  bsz_images: 64
