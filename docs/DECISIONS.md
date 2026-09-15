@@ -55,6 +55,14 @@ Research questions (from the PDF, kept verbatim in spirit):
 - No third estimator (FoundationPose, SAM-6D) before milestone Delta is complete; if added later it is a
   comparator row only.
 - Each estimator lives in its own container on the GPU machine (D15); the core consumes cached outputs.
+- Found during Alpha: FoundPose's `scripts/infer.py` consults ground truth (drops detections whose mask
+  IoU with GT is < 0.05, evaluates inline) and reads detections from a fixed CNOS file. The adapter
+  therefore drives the upstream modules (crop camera → DINOv2 ViT-L/14 layer-18 tokens → tf-idf
+  template retrieval → cyclic-buddy correspondences → PnP-RANSAC) itself and never touches GT, so
+  A0 (GT masks) and A1 (CNOS masks) differ only in the Detections fed in. Its `pose_score` is the
+  upstream many-to-many inlier ratio; `n_inliers` and the mean inlier reprojection error are stored.
+- MegaPose's output is its own refined pose (`megapose-1.0-RGB-multi-hypothesis`) but is tagged
+  `stage=coarse` here: the project's Refinement stage runs after every estimator alike.
 
 ### D4 — Segmentation: ground-truth masks + CNOS; trained fast segmenter deferred
 - `Segmenter` plugin interface: `(rgb, K, object_ids) → list[Detection]`.
@@ -62,6 +70,12 @@ Research questions (from the PDF, kept verbatim in spirit):
   matching; GPU only; outputs cached).
 - A trained lightweight instance segmenter is stretch — needed only for the deployment / latency branch
   (ablations A10, A11).
+- Found during Alpha: CNOS templates are rendered with pyrender from `models_cad` (the "pbr" variant
+  needs the 23 GB T-LESS PBR training set to pick reference crops; the paper's PBR-template numbers
+  are a little higher). Its `run_inference.py` dataloader breaks on T-LESS with current bop_toolkit
+  split naming, so the adapter feeds the target images to `CNOS.test_step` itself. Detections are
+  the per-object-NMS survivors above `confidence_thresh = 0.15`, ordered by score, with masks below
+  50 px dropped.
 
 ### D5 — Datasets: T-LESS + XYZ-IBD must-have; ITODD-MV and IPD stretch
 - **T-LESS** — development/debug set: single-view, 30 symmetric textureless objects, public GT, small.
@@ -144,7 +158,13 @@ Defined in [`CONTEXT.md`](../CONTEXT.md). Non-negotiable rules:
   floats, QualitySignals as columns); masks as PNG; BOP CSV from `evaluate`.
 - GPU stages (`segment` = CNOS, `coarse_pose` = FoundPose / MegaPose) run remotely; their output
   directories are rsync'd to the laptop and every downstream stage runs locally.
-- Configuration: Hydra. One `configs/experiments/A<n>.yaml` per ablation row.
+- Configuration: Hydra. One `configs/experiment/A<n>.yaml` per ablation row (group directories are
+  singular — `dataset/`, `segmenter/`, `estimator/`, `experiment/` — because a Hydra group is its
+  directory name and the command line is `experiment=A0 dataset=tless`).
+- GPU stages are declared `kind: external` with a `command` template; only `name`, `version` and
+  `params` enter the stage hash, so the same cache directory is valid whether the adapter ran in
+  Docker or in a host venv. Without `run_external=true` the runner refuses to run such a stage and
+  prints the exact adapter command.
 - Every run writes `run_manifest.json`: git commit, config hash, dataset version, object/camera subset,
   checkpoints, GPU/CPU, CUDA version, seed, per-stage timings, peak memory.
 
@@ -182,6 +202,13 @@ Defined in [`CONTEXT.md`](../CONTEXT.md). Non-negotiable rules:
   the *official* numbers are produced by running `bop_toolkit` in its own environment
   (`tools/bop_eval.sh`, GPU machine) on those CSVs and are the ones reported.
 - Laptop bootstrap: install uv → `uv sync` → `uv run pytest`. CI runs lint, type-check and tests on CPU.
+- Found during Alpha: `docker/<name>/{Dockerfile, requirements.txt, upstream.env, patch.sh}` is the
+  single source of truth per estimator, and `tools/setup_estimator_env.sh <name>` builds an equivalent
+  host venv (`envs/<name>`, `third_party/<name>`) from the same files for GPU hosts without the NVIDIA
+  Container Toolkit (the first GPU machine had Docker but no toolkit and no root). PyTorch is pinned to
+  2.5.1+cu118 because that machine's TITAN X is Pascal (sm_61), which cu12x wheels no longer build for.
+  The stage `version` strings in `configs/` carry the upstream commit, so bumping a pin invalidates
+  the cache.
 
 ### D16 — Testing: synthetic-truth tests for every geometry stage + one tiny BOP fixture
 - `tests/synth/` builds Scenes from primitives / tiny meshes, renders depth and masks at known poses, adds
@@ -208,8 +235,8 @@ Defined in [`CONTEXT.md`](../CONTEXT.md). Non-negotiable rules:
 BinPoseRT/
 ├── README.md  CONTEXT.md  LICENSE  pyproject.toml  uv.lock
 ├── docs/            DECISIONS.md  adr/  source/  report/ (later)
-├── configs/         datasets/ segmenters/ estimators/ refiners/ fusion/ confidence/ nbv/
-│                    experiments/A0..A9.yaml  benchmark.yaml
+├── configs/         config.yaml  dataset/ segmenter/ estimator/ refiner/ fusion/ confidence/ nbv/
+│                    experiment/A0..A9.yaml smoke.yaml  benchmark.yaml   (singular: Hydra groups)
 ├── binposert/       core package (CPU-only imports)
 │   ├── types.py         View, Scene, ObjectModel, SymmetryGroup, Detection, PoseHypothesis,
 │   │                    QualitySignals, ObjectTrack, FusedPose, Verdict            (D7)
@@ -228,9 +255,11 @@ BinPoseRT/
 │   └── viz/             overlays, failure galleries, grasp-pose visualisation
 ├── adapters/        cnos_cli.py  foundpose_cli.py  megapose_cli.py   (run inside docker/, GPU)
 ├── docker/          cnos/  foundpose/  megapose/                                    (D15)
-├── tools/           download_bop.py  make_mini_bop.py  run.py  benchmark.py  plot.py
+├── tools/           download_bop.py  make_mini_bop.py  run.py  bop_eval.sh  gallery.py  report.py
+│                    setup_estimator_env.sh  benchmark.py  plot.py
 ├── tests/           synth/  fixtures/mini_bop/  test_*.py                           (D16)
-└── outputs/         (git-ignored) <dataset>/<split>/<stage>/<hash>/
+├── envs/ third_party/  (git-ignored) host venvs + upstream checkouts when Docker cannot see the GPU
+└── outputs/         (git-ignored) <dataset>/<split>/<stage>/<hash>/  runs/<exp>_<dataset>/run_manifest.json
 ```
 Directories are created when their milestone starts. `cpp/` appears only after Delta profiling (D6);
 `synthetic/` only if A11 is attempted (D14).
@@ -306,7 +335,7 @@ onboarding tool · benchmark scripts (one command per ablation) · results CSV/J
 | Increment | Status | Notes |
 |---|---|---|
 | 1 Foundations | **done 2026-09-12** | 30 tests, < 5 s, CPU only; `types`, `transforms`, `symmetry`, `render`, `data`, `evaluate` |
-| 2 Alpha | not started | |
+| 2 Alpha | **done 2026-09-15** | T-LESS BOP19 official AR: A0 59.2 (GT masks + FoundPose), A1 35.4 (CNOS + FoundPose), A5 48.2 (CNOS + MegaPose); core evaluator within 0.3 pt of bop_toolkit; 44 tests, < 15 s; GPU stages ran from host venvs (Docker images written, unbuilt: no container toolkit on the machine) |
 | 3 Beta | not started | |
 | 4 Gamma | not started | |
 | 5 Delta | not started | |
@@ -316,3 +345,5 @@ onboarding tool · benchmark scripts (one command per ablation) · results CSV/J
 - 2026-09-12 — initial record, D1–D19.
 - 2026-09-12 — Foundations increment complete; D5 (T-LESS multi-view note), D8 (pixel convention), D16 (fixture facts) updated from implementation.
 - 2026-09-12 — D15: bop_toolkit moved out of core deps (numpy<2 / opencv conflict); metrics reimplemented in core, official eval in a separate env.
+- 2026-09-14 — Alpha: `binposert/data/` was missing from the Foundations commit (unanchored `data/` in `.gitignore`), rebuilt from its tests. D3/D4 adapter quirks, D12 external stages, D15 host-venv fallback + cu118 pin, D18 singular Hydra group directories recorded.
+- 2026-09-15 — Alpha closed. Core evaluator aligned with `eval_bop19_pose` (valid GT = `inst_count` most visible; pooled recall; bop19 VSD on distance images; `n_top = inst_count`) — agrees within 0.3 AR points on all three rows. FoundPose templates rendered at `ssaa_factor = 1` (upstream 4 renders the full frame and warps on the CPU: 7 s vs 0.15 s per template). MegaPose render workers exchange numpy arrays (torch shared-memory hand-off deadlocks under fork on torch 2.5). CNOS `SAM ViT-H` costs ~19 s per image on the Pascal TITAN X; FastSAM is the fallback for larger datasets.

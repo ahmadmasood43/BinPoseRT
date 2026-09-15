@@ -1,0 +1,27 @@
+# FoundPose estimator environment (D15). Shared by docker/foundpose/Dockerfile and envs/foundpose.
+# Upstream pins python 3.9 / torch 2.3 / faiss-gpu / cuml; here: torch 2.5.1+cu118 (Pascal-capable),
+# faiss-cpu (the kNN indices are CPU-side in upstream anyway; kmeans is patched to CPU).
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch==2.5.1+cu118
+torchvision==0.20.1+cu118
+numpy==1.26.4
+scipy==1.14.1
+scikit-learn==1.5.2
+scikit-image==0.24.0
+faiss-cpu==1.9.0
+kornia==0.7.4
+opencv-python==4.11.0.86
+pillow==10.4.0
+imageio==2.36.1
+matplotlib==3.9.2
+pandas==2.2.3
+pyarrow==18.1.0
+pyrender==0.1.45
+trimesh==4.5.3
+pypng==0.20220715.0
+vispy==0.14.3
+pytz==2024.2
+tabulate==0.9.0
+torchinfo==1.8.0
+webdataset==0.2.100
+tqdm==4.67.1

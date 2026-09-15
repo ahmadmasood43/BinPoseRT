@@ -4,7 +4,7 @@
 Examples::
 
     uv run python tools/download_bop.py tless --parts base models
-    uv run python tools/download_bop.py tless --parts test_primesense        # ~1.6 GB, GPU machine
+    uv run python tools/download_bop.py tless --parts test_primesense_bop19   # 825 MB, GPU machine
     uv run python tools/download_bop.py xyzibd --parts base models val       # GPU machine only
 
 Archive names follow the BOP convention ``<dataset>_<part>.zip``. Nothing is downloaded twice.

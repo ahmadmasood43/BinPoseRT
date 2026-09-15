@@ -1,6 +1,6 @@
 # data and run artefacts never enter git
-outputs/
-data/
+/outputs/
+/data/
 *.pth
 *.onnx
 *.engine
@@ -15,3 +15,5 @@ __pycache__/
 .pytest_cache/
 build/
 dist/
+/envs/
+/third_party/

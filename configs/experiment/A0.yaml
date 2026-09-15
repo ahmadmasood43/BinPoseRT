@@ -1,0 +1,10 @@
+# @package _global_
+# A0 — upper-bound baseline: GT masks -> FoundPose coarse pose -> evaluate (no refinement, 1 view)
+defaults:
+  - override /segmenter: gt
+  - override /estimator: foundpose
+
+experiment:
+  name: A0
+  question: upper-bound baseline
+stages: [segment, coarse_pose, evaluate]

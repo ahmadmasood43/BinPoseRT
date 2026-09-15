@@ -1,0 +1,6 @@
+# Upper-bound Segmenter: BOP mask_visib of every GT object with visib_fract >= 0.1 (D4).
+name: gt
+kind: internal
+version: 1
+params:
+  min_visible_fraction: 0.1

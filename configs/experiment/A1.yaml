@@ -1,0 +1,10 @@
+# @package _global_
+# A1 — cost of automatic segmentation: CNOS masks -> FoundPose coarse pose -> evaluate
+defaults:
+  - override /segmenter: cnos
+  - override /estimator: foundpose
+
+experiment:
+  name: A1
+  question: cost of automatic segmentation
+stages: [segment, coarse_pose, evaluate]

@@ -1,0 +1,23 @@
+# MegaPose comparator (render-and-compare, coarse + refiner), run through adapters/megapose_cli.py.
+name: megapose
+kind: external
+version: megapose@f3b8e124
+params:
+  model: megapose-1.0-RGB-multi-hypothesis
+  n_refiner_iterations: 5
+  n_pose_hypotheses: 5
+command:
+  - envs/megapose/.venv/bin/python
+  - adapters/megapose_cli.py
+  - --dataset-root
+  - "{dataset_root}"
+  - --split
+  - "{split}"
+  - --targets
+  - "{targets}"
+  - --detections
+  - "{upstream_segment}"
+  - --out
+  - "{out_dir}"
+  - --params
+  - "{params_json}"

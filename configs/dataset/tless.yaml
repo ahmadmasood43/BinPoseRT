@@ -1,0 +1,7 @@
+name: tless
+root: data/bop/tless
+split: test_primesense        # directory name
+bop_split: test               # split name used by bop_toolkit and in BOP result file names
+models_dir: models_eval       # BOP evaluation models (metrics); estimators render models_cad
+targets: test_targets_bop19.json
+continuous_symmetry_steps: 36

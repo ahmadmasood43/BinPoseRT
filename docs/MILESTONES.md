@@ -18,7 +18,7 @@ anything slips. Finalisation is protected: it never shrinks to absorb overrun.
 | # | Milestone | Weeks | Planned dates | Runs on | Ablations | Status |
 |---|---|---|---|---|---|---|
 | 1 | **Foundations** | 0 | — 2026-09-12 | laptop | — | **done 2026-09-12** |
-| 2 | **Alpha** — baseline | 1–3 | 2026-09-14 → 2026-10-04 | GPU (adapters once), then laptop | A0, A1, A5 | not started |
+| 2 | **Alpha** — baseline | 1–3 | 2026-09-14 → 2026-10-04 | GPU (adapters once), then laptop | A0, A1, A5 | **done 2026-09-15** |
 | 3 | **Beta** — refinement | 4–6 | 2026-10-05 → 2026-10-25 | laptop | A2, A3, A4 | not started |
 | 4 | **Gamma** — multi-view | 7–9 | 2026-10-26 → 2026-11-15 | laptop (cached GPU outputs) | A6, A7 | not started |
 | 5 | **Delta** — reliability | 10–12 | 2026-11-16 → 2026-12-06 | laptop | A8 | not started |
@@ -33,7 +33,7 @@ gantt
     axisFormat  %d %b
     section Must-have
     Foundations            :done,    m1, 2026-09-07, 2026-09-12
-    Alpha (baseline)       :active,  m2, 2026-09-14, 2026-10-04
+    Alpha (baseline)       :done,    m2, 2026-09-14, 2026-09-15
     Beta (refinement)      :         m3, 2026-10-05, 2026-10-25
     Gamma (multi-view)     :         m4, 2026-10-26, 2026-11-15
     Delta (reliability)    :         m5, 2026-11-16, 2026-12-06
@@ -87,9 +87,9 @@ BOP CSV; renderer, symmetry, transforms tested.
 
 ---
 
-## Milestone 2 — Alpha: single-view baseline
+## Milestone 2 — Alpha: single-view baseline ✅
 
-**Weeks 1–3 · 2026-09-14 → 2026-10-04 · A0, A1, A5**
+**Weeks 1–3 · 2026-09-14 → 2026-10-04 · A0, A1, A5 · closed 2026-09-15**
 
 **Goal.** Cached zero-shot Detections and coarse PoseHypotheses for T-LESS from CNOS, FoundPose and
 MegaPose, consumed by a reproducible local pipeline that yields a deterministic BOP AR.
@@ -100,36 +100,67 @@ MegaPose, consumed by a reproducible local pipeline that yields a deterministic 
 ### Tasks
 
 Week 1 — GPU side (start immediately; laptop tasks run in parallel while images build)
-- [ ] `docker/cnos/`, `docker/foundpose/`, `docker/megapose/`: one Dockerfile each, upstream commit pinned (D15)
-- [ ] `adapters/cnos_cli.py`, `foundpose_cli.py`, `megapose_cli.py`: read BOP, write D12 artefacts
+- [x] `docker/cnos/`, `docker/foundpose/`, `docker/megapose/`: one Dockerfile each, upstream commit pinned (D15)
+      — plus `requirements.txt` / `upstream.env` / `patch.sh` per estimator and
+      `tools/setup_estimator_env.sh` building the same environment as a host venv (the GPU machine
+      at hand has no NVIDIA Container Toolkit and no root; images are untested until one does)
+- [x] `adapters/cnos_cli.py`, `foundpose_cli.py`, `megapose_cli.py`: read BOP, write D12 artefacts
       (Detections → masks PNG + Parquet; PoseHypotheses → Parquet with `stage=coarse` and QualitySignals)
-- [ ] Download T-LESS test split + models on the GPU machine; smoke-run each adapter on one scene
-- [ ] Full T-LESS runs: CNOS, FoundPose (GT masks and CNOS masks), MegaPose (CNOS masks); rsync to laptop
+- [x] Download T-LESS test split + models on the GPU machine; smoke-run each adapter on one scene
+      (CNOS: 3 images, masks IoU ≈ 0.9 vs GT; FoundPose: 2 images; MegaPose: import-level only —
+      the GPU holds one estimator at a time)
+- [x] Full T-LESS runs: CNOS (1000 images, 62,751 detections, 5.5 h), FoundPose on GT masks and on CNOS
+      masks (30 object representations 2.5 h once, then 0.37 s per instance), MegaPose on CNOS masks
+      (multi-hypothesis, 12 s per image) — all cached under `outputs/tless/test_primesense/`; rsync to
+      laptop pending
 
 Week 2 — Laptop side
-- [ ] `binposert/segment/`: `Segmenter` interface, `GroundTruthSegmenter`, CNOS cache reader (D4)
-- [ ] `binposert/pose/`: `PoseEstimator` interface, FoundPose / MegaPose cache readers (D3)
-- [ ] `binposert/pipeline/`: stage DAG, content-addressed cache with `_SUCCESS`, `run_manifest.json`,
+- [x] `binposert/segment/`: `Segmenter` interface, `GroundTruthSegmenter`, CNOS cache reader (D4)
+- [x] `binposert/pose/`: `PoseEstimator` interface, FoundPose / MegaPose cache readers (D3);
+      `GroundTruthPerturbedEstimator` for plumbing tests
+- [x] `binposert/pipeline/`: stage DAG, content-addressed cache with `_SUCCESS`, `run_manifest.json`,
       Hydra entry `tools/run.py` (D12)
-- [ ] `configs/`: `datasets/tless.yaml`, `segmenters/`, `estimators/`, `experiments/A0.yaml A1.yaml A5.yaml`
-- [ ] Tests: cache hash stability (same inputs → same hash, config change → new hash), stage skip on
-      `_SUCCESS`, adapter output schema round-trips through the readers, mini-fixture end-to-end via `run.py`
+- [x] `configs/`: `dataset/tless.yaml`, `segmenter/`, `estimator/`, `experiment/A0.yaml A1.yaml A5.yaml`
+      (+ `smoke.yaml`; group directories are singular, see D12/D18)
+- [x] Tests: cache hash stability (same inputs → same hash, config change → new hash), stage skip on
+      `_SUCCESS`, adapter output schema round-trips through the readers, mini-fixture end-to-end via `run.py`,
+      external stage stub; 44 tests, < 10 s
 
 Week 3 — Results and closure
-- [ ] `tools/bop_eval.sh`: official `bop_toolkit` evaluation in its own env on the GPU machine (D15)
-- [ ] A0 / A1 / A5 on T-LESS: BOP AR (VSD/MSSD/MSPD) from core metrics **and** official toolkit; agree within
-      tolerance or the discrepancy is explained in `outputs/`
-- [ ] First stratified report: AR by visibility bin [0.10, 0.30), [0.30, 0.60), [0.60, 1.00]
-- [ ] `binposert/viz/`: pose overlay renderer; first failure gallery (worst 20 by MSSD)
-- [ ] Update DECISIONS.md increment status; note any adapter quirks under D3/D4
+- [x] `tools/bop_eval.sh`: official `bop_toolkit` evaluation in its own env on the GPU machine (D15)
+- [x] Core metrics vs official toolkit agree: on a 6423-instance T-LESS run (GT + 6 mm / 8° noise)
+      AR 16.15 vs 16.06, VSD 5.42 / 5.39, MSSD 22.69 / 22.59, MSPD 20.33 / 20.20 after aligning the
+      core with `eval_bop19_pose` (valid GT = `inst_count` most visible, pooled recall, bop19 VSD);
+      the residual is the 36-step vs 315-step symmetry sampling
+- [x] A0 / A1 / A5 on T-LESS, official `bop_toolkit` (core in brackets):
+      A0 GT masks + FoundPose **59.2** (59.0) · A1 CNOS + FoundPose **35.4** (35.2) · A5 CNOS + MegaPose
+      **48.2** (48.0) — see [`results_alpha_tless.md`](results_alpha_tless.md)
+- [x] First stratified report: AR by visibility bin [0.10, 0.30), [0.30, 0.60), [0.60, 1.00]
+      (`summary.md` / `report.json` of every evaluate stage; `tools/report.py` aggregates rows)
+- [x] `binposert/viz/`: pose overlay renderer; failure gallery (worst 20 by MSSD, `tools/gallery.py`)
+- [x] Update DECISIONS.md increment status; adapter quirks noted under D3/D4/D12/D15/D18
 
-### Exit criterion
+### Exit criterion (met 2026-09-15)
 `tools/run.py experiment=A0 dataset=tless` yields a BOP CSV and deterministic AR from cached FoundPose
 outputs; A1 with CNOS.
 
 ### Deliverables
-Three Docker images · three adapters · `outputs/tless/test/{segment,coarse_pose,evaluate}/…` cached ·
-A0/A1/A5 AR table (GT-mask vs CNOS cost; FoundPose vs MegaPose) · first failure gallery.
+Three Docker specs (images unbuilt on the first GPU machine — no container toolkit; the same pinned
+environments ran as host venvs) · three adapters · `outputs/tless/test_primesense/{segment,coarse_pose,
+evaluate}/…` cached · A0/A1/A5 AR table · failure galleries for all three rows
+(`outputs/…/evaluate/<hash>/gallery/`).
+
+### What the numbers say
+- FoundPose-coarse with GT masks: MSPD 82 but VSD/MSSD ≈ 50 — poses are right in the image plane and
+  wrong in depth; the worst-20 gallery is heavily occluded objects placed far behind the scene. That is
+  the regime Beta's depth refinement and silhouette gate address.
+- CNOS costs 24 AR points. 15 % of target instances receive no prediction at all, and AR is 1 % below
+  30 % visibility; the A1 worst-20 are one family: CNOS's *top-scoring* proposal for a large object is a
+  small fragment elsewhere, so the BOP `n_top = inst_count` rule never poses the real one. Detection-score
+  unreliability, not pose estimation, dominates — motivation for Delta's learned confidence.
+- MegaPose (refined, multi-hypothesis) on the same masks recovers most of the depth gap (VSD 45.6 vs 27.4)
+  while MSPD stays capped by the same misses; its `pose_score` separated the two failures in the smoke
+  run cleanly.
 
 ### Risks specific to this milestone
 | Risk | Response |
@@ -391,3 +422,5 @@ Decided up front so it is not decided under pressure:
 | Date | Event |
 |---|---|
 | 2026-09-12 | Foundations closed. Plan written. |
+| 2026-09-14 | Alpha started on the GPU machine. `binposert/data/` found missing from the Foundations commit (an unanchored `data/` in `.gitignore`); rebuilt from its tests. Pipeline, plugins, adapters, host environments, evaluator parity with bop_toolkit done in one day; CNOS full run started (~4 h), FoundPose / MegaPose rows queued behind it (`tools/run_alpha.sh`). |
+| 2026-09-15 | Alpha closed: A0 59.2 / A1 35.4 / A5 48.2 official AR on T-LESS. Evaluator aligned with `eval_bop19_pose` (three protocol deviations fixed), parallel over scenes (25 → 7 min). MegaPose needed a numpy hand-off patch for its forked render workers. Total GPU wall time ≈ 13 h on a Pascal TITAN X. |

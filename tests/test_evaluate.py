@@ -114,7 +114,7 @@ def test_large_errors_and_missing_predictions_lower_recall(mini_bop: BopDataset)
     assert bad.ar_mssd == pytest.approx(0.0)
     half = [p for p in _gt_predictions(mini_bop) if p.object_id == 5]
     partial = evaluate_localisation(half, mini_bop, n_model_points=300, with_vsd=False)
-    # BOP convention: recall pooled per object, then averaged over objects -> (1.0 + 0.0) / 2
-    assert partial.ar_mssd == pytest.approx(0.5)
+    # BOP19 convention (eval_bop19_pose): recall pooled over all valid GT -> 4 obj-5 of 12
+    assert partial.ar_mssd == pytest.approx(4 / 12)
     assert partial.per_object[5]["ar_mssd"] == pytest.approx(1.0)
     assert partial.per_object[1]["ar_mssd"] == pytest.approx(0.0)

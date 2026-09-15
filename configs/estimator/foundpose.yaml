@@ -1,0 +1,39 @@
+# FoundPose coarse stage (DINOv2 ViT-L/14 features, tf-idf template retrieval, cyclic-buddy
+# correspondences, PnP-RANSAC). Run through adapters/foundpose_cli.py inside docker/foundpose.
+name: foundpose
+kind: external
+version: foundpose@3103473b
+params:
+  extractor: dinov2_version=vitl14_stride=14_facet=token_layer=18_logbin=0_norm=1
+  templates:
+    min_num_viewpoints: 57
+    num_inplane_rotations: 14
+    crop_size: [420, 420]
+    # Upstream default is 4: it renders the *full* camera frame at 4x (2856^2 for T-LESS) and
+    # warps it on the CPU, ~7 s per template = days for 30 x 798 templates. At 1 the same
+    # pipeline takes 0.15 s per template; the templates are 420^2 crops feeding 14-px patches.
+    ssaa_factor: 1.0
+  repre:
+    pca_components: 256
+    cluster_num: 2048
+  infer:
+    match_top_n_templates: 5
+    match_top_k_buddies: 300
+    pnp_ransac_iter: 400
+    pnp_inlier_thresh: 10.0
+    num_preds_factor: 1
+command:
+  - envs/foundpose/.venv/bin/python
+  - adapters/foundpose_cli.py
+  - --dataset-root
+  - "{dataset_root}"
+  - --split
+  - "{split}"
+  - --targets
+  - "{targets}"
+  - --detections
+  - "{upstream_segment}"
+  - --out
+  - "{out_dir}"
+  - --params
+  - "{params_json}"

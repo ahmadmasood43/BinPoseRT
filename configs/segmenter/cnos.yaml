@@ -1,0 +1,28 @@
+# CNOS (SAM ViT-H proposals + DINOv2 ViT-L/14 template matching), run through adapters/cnos_cli.py
+# inside docker/cnos (or envs/cnos on a GPU host). `version` pins the upstream commit so a bump
+# invalidates the cache. Only name/version/params enter the stage hash; `command` is per-machine.
+name: cnos
+kind: external
+version: cnos@298d1f33
+params:
+  segmentor: sam            # sam | fastsam
+  templates: pyrender       # pyrender templates rendered from models_cad (no PBR training images)
+  level_templates: 0
+  aggregation: avg_5
+  confidence_thresh: 0.15
+  nms_thresh: 0.25
+  stability_score_thresh: 0.97
+  min_mask_pixels: 50
+command:
+  - envs/cnos/.venv/bin/python
+  - adapters/cnos_cli.py
+  - --dataset-root
+  - "{dataset_root}"
+  - --split
+  - "{split}"
+  - --targets
+  - "{targets}"
+  - --out
+  - "{out_dir}"
+  - --params
+  - "{params_json}"

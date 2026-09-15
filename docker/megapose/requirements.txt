@@ -1,0 +1,28 @@
+# MegaPose estimator environment (D15). Upstream pins torch 1.11 / CUDA 11.3 via conda; here the
+# inference path runs on torch 2.5.1+cu118 with pinocchio from the pip "pin" wheels.
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch==2.5.1+cu118
+torchvision==0.20.1+cu118
+numpy==1.26.4
+scipy==1.14.1
+pin==2.7.0
+panda3d==1.10.14
+panda3d-gltf==1.2.0
+roma==1.5.1
+transforms3d==0.4.2
+trimesh==4.5.3
+omegaconf==2.3.0
+simplejson==3.19.3
+joblib==1.4.2
+pandas==2.2.3
+pyarrow==18.1.0
+xarray==2024.10.0
+opencv-python==4.11.0.86
+open3d==0.19.0
+imageio==2.36.1
+pyyaml==6.0.2
+pypng==0.20220715.0
+bokeh==3.6.2
+psutil==6.1.0
+webdataset==0.2.100
+tqdm==4.67.1

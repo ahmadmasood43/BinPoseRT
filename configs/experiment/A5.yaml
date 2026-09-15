@@ -1,0 +1,10 @@
+# @package _global_
+# A5 — estimator dependency: CNOS masks -> MegaPose -> evaluate
+defaults:
+  - override /segmenter: cnos
+  - override /estimator: megapose
+
+experiment:
+  name: A5
+  question: estimator dependency
+stages: [segment, coarse_pose, evaluate]

@@ -1,0 +1,7 @@
+name: mini_bop
+root: tests/fixtures/mini_bop
+split: test
+bop_split: test
+models_dir: models
+targets: null
+continuous_symmetry_steps: 36

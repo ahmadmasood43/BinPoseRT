@@ -1,0 +1,33 @@
+# Root Hydra config. Usage: uv run python tools/run.py experiment=A0 dataset=tless
+defaults:
+  - _self_
+  - dataset: tless
+  - segmenter: gt
+  - estimator: foundpose
+  - experiment: null
+
+experiment:
+  name: adhoc
+  question: ""
+
+# outputs/<dataset>/<split>/<stage>/<hash>/ (D12); relative paths resolve against the repo root
+outputs_root: outputs
+# Allow this run to invoke GPU adapters (docker/ or envs/) when a GPU stage is not cached.
+run_external: false
+seed: 0
+stages: [segment, coarse_pose, evaluate]
+
+evaluate:
+  method_name: binposert-${experiment.name}
+  n_model_points: 0        # 0 = every model vertex, as bop_toolkit does with models_eval
+  with_vsd: true
+  score_signal: pose_score
+  n_workers: 0             # 0 = all cores but one; scenes are evaluated in parallel processes
+  visibility_bins: [[0.1, 0.3], [0.3, 0.6], [0.6, 1.0]]
+
+hydra:
+  run:
+    dir: outputs/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  job_logging:
+    root:
+      level: INFO

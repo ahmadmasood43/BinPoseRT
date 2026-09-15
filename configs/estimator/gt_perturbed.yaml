@@ -1,0 +1,8 @@
+# Synthetic estimator: ground truth + seeded Gaussian noise. Pipeline tests and demos only.
+name: gt_perturbed
+kind: internal
+version: 1
+params:
+  t_sigma_mm: 0.0
+  r_sigma_deg: 0.0
+  seed: 0

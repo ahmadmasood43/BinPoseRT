@@ -1,0 +1,13 @@
+# @package _global_
+# smoke — end-to-end pipeline on the committed mini fixture with no GPU stage (CI)
+defaults:
+  - override /dataset: mini_bop
+  - override /segmenter: gt
+  - override /estimator: gt_perturbed
+
+experiment:
+  name: smoke
+  question: pipeline plumbing
+stages: [segment, coarse_pose, evaluate]
+evaluate:
+  n_model_points: 500
