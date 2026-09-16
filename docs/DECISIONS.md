@@ -105,8 +105,16 @@ Defined in [`CONTEXT.md`](../CONTEXT.md). Non-negotiable rules:
 ### D8 — Refinement acceptance gate: rendered-silhouette IoU vs mask + displacement cap
 - After registration, render the ObjectModel at the refined pose and compare its silhouette with the
   Detection mask (IoU, boundary error). ICP never optimises this quantity, so the check is independent.
+- Depth initialisation (Beta, 2026-09-15): before ICP the coarse translation is scaled along its viewing
+  ray so that the rendered depth matches the observed depth on the pixels both cover (`z_init:
+  median_depth`, ≥ 50 overlapping pixels). RGB coarse estimators are right in the image and wrong in
+  depth (FoundPose on T-LESS: median coarse depth error 25 mm, 52 % beyond 0.25 d), which local ICP
+  cannot bridge; on 1371 sampled hypotheses this step alone raised the share within 0.1 d from 11.5 % to
+  46.5 % (89 % improved, 7 % worsened by > 1 mm). The shift is stored per hypothesis (`z_shift_mm`).
 - Hard cap: reject when the refined pose moved more than `α · diameter` in translation or `β°`
-  (symmetry-aware) in rotation from the coarse pose. Defaults `α = 0.25`, `β = 30°`, tuned on T-LESS val.
+  (symmetry-aware) in rotation from the pose ICP started at (the coarse pose after the depth
+  initialisation). Defaults `α = 0.25`, `β = 30°`, tuned on T-LESS val. The silhouette-IoU-drop check
+  compares against the coarse pose the stage received.
 - A rejected refinement returns the coarse hypothesis unchanged with a `rejection_reason`; IoU and
   displacement are stored as QualitySignals either way.
 - Renderer: Open3D `RaycastingScene` (CPU, Embree) for depth/silhouette rendering and visibility-aware
@@ -115,6 +123,11 @@ Defined in [`CONTEXT.md`](../CONTEXT.md). Non-negotiable rules:
 - Pixel convention: integer pixel coordinates are pixel centres (OpenCV/BOP). Open3D shoots rays through
   `(u+0.5, v+0.5)`, so the renderer shifts the principal point by half a pixel; rendered depth then
   unprojects exactly with `unproject_depth`. Depth is z along the optical axis, not ray length.
+- Rays are cast single-threaded (`cast_rays(nthreads=1)`). Open3D 0.19's parallel raycaster corrupts its
+  output under multi-process load (15 workers on 16 cores: 126 of 1751 renders raised on garbage indices,
+  5 more silently differed from a re-render; `nthreads=1`: 0 and 0; 13 ms vs 5 ms per 720×540 render).
+  Stages parallelise over scenes with one process per scene (`pipeline/pool.py`, one BLAS/OpenMP thread
+  each) instead. Found 2026-09-15 by the Beta refine stage; the evaluate stage version was bumped.
 
 ### D9 — Symmetry: one flat SymmetryGroup per ObjectModel; continuous axes discretised  → [ADR-0003](adr/0003-discretised-continuous-symmetries.md)
 - Load `symmetries_discrete` and `symmetries_continuous` from BOP `models_info.json`. Expand each
@@ -296,7 +309,8 @@ Work proceeds in increments, each ending with green tests and a touch to this fi
 | A2 | CNOS | FoundPose | pt-plane ICP + gate | ✓ | 1 | — | — | does depth help? (RQ-A) |
 | A3 | CNOS | FoundPose | robust ICP + gate | ✓ | 1 | — | — | robust loss in clutter (RQ-B) |
 | A4 | CNOS | FoundPose | GICP + gate | ✓ | 1 | — | — | registration comparison (RQ-B) |
-| A5 | CNOS | MegaPose | best | ✓ | 1 | — | — | estimator dependency |
+| A5 | CNOS | MegaPose | — | ✓ | 1 | — | — | estimator dependency (comparator, MegaPose's own refiner) |
+| A5r | CNOS | MegaPose | best | ✓ | 1 | — | — | does depth refinement add on top of MegaPose's refiner? (Beta) |
 | A6 | CNOS | FoundPose | best | ✓ | 2 (mean / mean + joint) | — | — | two-view gain (RQ-C) |
 | A7 | CNOS | FoundPose | best | ✓ | 3–4 | — | — | saturation (RQ-C) |
 | A8 | CNOS | FoundPose | best | ✓ | best | ✓ | — | failure detection (RQ-D) |
@@ -336,7 +350,7 @@ onboarding tool · benchmark scripts (one command per ablation) · results CSV/J
 |---|---|---|
 | 1 Foundations | **done 2026-09-12** | 30 tests, < 5 s, CPU only; `types`, `transforms`, `symmetry`, `render`, `data`, `evaluate` |
 | 2 Alpha | **done 2026-09-15** | T-LESS BOP19 official AR: A0 59.2 (GT masks + FoundPose), A1 35.4 (CNOS + FoundPose), A5 48.2 (CNOS + MegaPose); core evaluator within 0.3 pt of bop_toolkit; 44 tests, < 15 s; GPU stages ran from host venvs (Docker images written, unbuilt: no container toolkit on the machine) |
-| 3 Beta | not started | |
+| 3 Beta | **done 2026-09-16** | T-LESS BOP19 official AR 35.4 → 47.8 (A2, depth init + point-to-plane ICP); robust 47.9, GICP 47.3. Depth initialisation of the translation added (D8); silhouette gate demoted to a signal after a val-scene sweep; renderer made single-threaded (Open3D parallel raycast corrupts under load). 71 tests, < 60 s; CPU only, from Alpha's caches |
 | 4 Gamma | not started | |
 | 5 Delta | not started | |
 | 6 Stretch | not started | |
@@ -347,3 +361,26 @@ onboarding tool · benchmark scripts (one command per ablation) · results CSV/J
 - 2026-09-12 — D15: bop_toolkit moved out of core deps (numpy<2 / opencv conflict); metrics reimplemented in core, official eval in a separate env.
 - 2026-09-14 — Alpha: `binposert/data/` was missing from the Foundations commit (unanchored `data/` in `.gitignore`), rebuilt from its tests. D3/D4 adapter quirks, D12 external stages, D15 host-venv fallback + cu118 pin, D18 singular Hydra group directories recorded.
 - 2026-09-15 — Alpha closed. Core evaluator aligned with `eval_bop19_pose` (valid GT = `inst_count` most visible; pooled recall; bop19 VSD on distance images; `n_top = inst_count`) — agrees within 0.3 AR points on all three rows. FoundPose templates rendered at `ssaa_factor = 1` (upstream 4 renders the full frame and warps on the CPU: 7 s vs 0.15 s per template). MegaPose render workers exchange numpy arrays (torch shared-memory hand-off deadlocks under fork on torch 2.5). CNOS `SAM ViT-H` costs ~19 s per image on the Pascal TITAN X; FastSAM is the fallback for larger datasets.
+- 2026-09-15/16 — Beta closed; D8 revised from evidence. (1) *Depth initialisation*: FoundPose coarse poses on
+  T-LESS have a median depth error of 25 mm (52 % beyond 0.25 d, up to 5 m) — the "right in the image, wrong in
+  depth" pattern Alpha saw in MSPD 82 vs VSD/MSSD ≈ 50; local ICP could not bridge it (58 % of hypotheses were
+  rejected before or by the gate). Scaling the translation along the viewing ray to the observed depth before
+  ICP takes per-hypothesis success (MSSD < 0.1 d) from 12.7 % to 46.0 %; ICP then reaches 56 %. (2) *Gate*: as
+  designed (IoU ≥ 0.5, IoU drop ≤ 0.1, α = 0.25 d, β = 30°) the gate rejected 31 % of hypotheses with 17 %
+  strict precision — 172 good candidates lost for 15 breaks avoided, −1.3 AR points. The CNOS mask is the
+  evidence the coarse pose was fitted to, so silhouette agreement is not independent evidence of a correct pose,
+  and the caps rejected the large corrections the depth initialisation enables. A 720-point sweep on val scenes
+  {1, 6, 11, 16}, validated on the other 16, chose α = 0.6 d, β = 90°, silhouette checks off, fitness ≥ 0.3:
+  7.5 % rejected, 99.7 % success-level precision, neutral on AR; silhouette IoU, displacement and fitness remain
+  QualitySignals for D11's confidence model. Displacement is measured from the pose ICP started at. (3)
+  *Registration variant* (RQ-B): point-to-plane 47.8, Tukey-robust 47.9, GICP 47.3 official AR — within noise;
+  point-to-plane is the default (fastest, 0.79 s per hypothesis). (4) *Renderer*: Open3D 0.19's parallel
+  `cast_rays` corrupts output under multi-process load (126 exceptions + 5 silent mismatches per 1751 renders
+  on 15 workers); rays are cast single-threaded and worker pools pin one BLAS/OpenMP thread each; the evaluate
+  stage version was bumped and A1 re-evaluated (35.2 core, unchanged). (5) Remaining refinement regressions:
+  already-good poses (within 5 mm: 93.5 → 84.5 AR on 195 instances) and wrong-instance detections; no measured
+  signal separates the first. (6) *A5r* (matrix row added; A5 stays un-refined): on MegaPose the stage costs 1.3 AR
+  (48.2 → 46.9) — the depth initialisation helps (42 → 61 % per-hypothesis success) but ICP moves near-perfect
+  poses by a constant ~2.5 mm along camera y for both estimators, with perfect fitness/RMSE: a depth↔RGB offset
+  of the sensor data, to be estimated GT-free in Gamma, not tuned against test GT. Full tables:
+  `docs/results_beta_tless.md`; the step-by-step decision log of the milestone: `docs/milestone_beta_decision.md`.

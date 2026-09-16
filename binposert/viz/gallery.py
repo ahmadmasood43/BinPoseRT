@@ -64,7 +64,7 @@ def make_failure_gallery(
         assert view.rgb is not None
         img = draw_pose_contour(view.rgb, renderers[o], gt.T_camera_object, view.K, GT_COLOR)
         img = draw_pose_contour(img, renderers[o], T_pred, view.K, PRED_COLOR)
-        crop = _crop_around(img, renderers[o], gt.T_camera_object, T_pred, view.K, crop_pad, tile)
+        crop = crop_around(img, renderers[o], [gt.T_camera_object, T_pred], view.K, crop_pad, tile)
         label = f"s{s} i{i} obj{o} vis{r.visible_fraction:.2f} MSSD {r.mssd_mm:.0f}mm"
         put_label(crop, label)
         tiles.append(crop)
@@ -83,13 +83,7 @@ def make_failure_gallery(
             }
         )
     if tiles:
-        cols = 5
-        rows_n = int(np.ceil(len(tiles) / cols))
-        grid = np.zeros((rows_n * tile, cols * tile, 3), dtype=np.uint8)
-        for k, t in enumerate(tiles):
-            y, x = divmod(k, cols)
-            grid[y * tile : (y + 1) * tile, x * tile : (x + 1) * tile] = t
-        cv2.imwrite(str(out / "gallery.png"), grid[:, :, ::-1])
+        cv2.imwrite(str(out / "gallery.png"), tile_grid(tiles, tile)[:, :, ::-1])
     with open(out / "gallery.json", "w") as f:
         json.dump(
             {"legend": {"green": "ground truth", "red": "closest prediction"}, "items": index},
@@ -99,17 +93,29 @@ def make_failure_gallery(
     return out
 
 
-def _crop_around(
+def tile_grid(tiles: list[np.ndarray], tile: int, cols: int = 5) -> np.ndarray:
+    rows_n = int(np.ceil(len(tiles) / cols))
+    grid = np.zeros((rows_n * tile, cols * tile, 3), dtype=np.uint8)
+    for k, t in enumerate(tiles):
+        y, x = divmod(k, cols)
+        grid[y * tile : (y + 1) * tile, x * tile : (x + 1) * tile] = t
+    return grid
+
+
+def crop_around(
     img: np.ndarray,
     renderer: MeshRenderer,
-    T_gt: np.ndarray,
-    T_pred: np.ndarray,
+    transforms: list[np.ndarray],
     K: np.ndarray,
     pad: float,
     tile: int,
 ) -> np.ndarray:
+    """Square crop around the union of the model's silhouettes at ``transforms``, resized to
+    ``tile`` × ``tile``."""
     h, w = img.shape[:2]
-    m = renderer.render(T_gt, K, (h, w)).mask | renderer.render(T_pred, K, (h, w)).mask
+    m = np.zeros((h, w), dtype=bool)
+    for T in transforms:
+        m |= renderer.render(T, K, (h, w)).mask
     ys, xs = np.nonzero(m)
     if len(xs) == 0:
         cx, cy, side = w // 2, h // 2, min(h, w)

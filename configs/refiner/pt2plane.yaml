@@ -1,0 +1,26 @@
+# Refinement (D8): point_to_plane ICP against the masked depth cloud, visibility-aware model crop
+# re-rendered at each coarse-to-fine step, independent silhouette + displacement gate.
+name: pt2plane
+version: 1
+params:
+  variant: point_to_plane
+  corr_dist_factors: [0.15, 0.08, 0.04]   # x diameter, coarse to fine
+  max_iterations: 30
+  robust_k_factor: 0.05                   # Tukey k as a fraction of the diameter (robust only)
+  max_model_points: 3000
+  max_scene_points: 3000
+  erode_px: 2
+  z_window_factor: 1.5                    # scene depth kept within +- factor x diameter of the start z
+  min_scene_points: 50
+  z_init: median_depth                    # translation re-initialised from depth along the ray (none | median_depth)
+  z_init_min_overlap: 50
+  # Gate tuned on T-LESS val scenes {1, 6, 11, 16} with tools/refine_report.py (2026-09-15, D8 change
+  # log): the silhouette checks rejected 6 good candidates per bad one (the CNOS mask is the evidence the
+  # coarse pose was fitted to) and the D8 default caps 0.25 d / 30 deg rejected the large corrections
+  # the depth initialisation makes possible. Silhouette IoU is still measured and stored as a signal.
+  gate:
+    alpha: 0.6                            # translation cap x diameter (ICP's move from the start pose)
+    beta_deg: 90.0                        # symmetry-aware rotation cap
+    min_iou: 0.0                          # silhouette check off (signal only)
+    max_iou_drop: 1.0                     # silhouette-drop check off (signal only)
+    min_fitness: 0.3                      # fraction of observed points explained by the model

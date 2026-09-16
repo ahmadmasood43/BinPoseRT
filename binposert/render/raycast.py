@@ -2,6 +2,12 @@
 
 Runs on CPU with no EGL/OSMesa. Signatures are the contract a GPU rasteriser must satisfy later.
 Depth images are float64 in millimetres (z along the optical axis), 0 where nothing is hit.
+
+Rays are cast single-threaded (``nthreads=1``). Open3D 0.19's parallel ``cast_rays`` corrupts its
+output under multi-process load: with 15 worker processes on 16 cores, 126 of 1751 renders of
+720×540 raised inside numpy on garbage indices and 5 more silently differed from a re-render;
+``nthreads=1`` gave 0 of both (13 ms vs 5 ms per render). Stages parallelise over scenes with one
+process per scene instead (``binposert.pipeline.pool``).
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ from binposert.transforms import Mat4, invert, transform_points
 from binposert.types import Mat3, ObjectModel
 
 NO_HIT = o3d.t.geometry.RaycastingScene.INVALID_ID
+RAY_THREADS = 1  # see the module docstring
 
 
 @dataclass(frozen=True)
@@ -51,7 +58,7 @@ class MeshRenderer:
     def render(self, T_camera_object: Mat4, K: Mat3, image_size: tuple[int, int]) -> RenderResult:
         h, w = image_size
         rays = _pinhole_rays(K, T_camera_object, w, h)
-        ans = self._scene.cast_rays(rays)
+        ans = self._scene.cast_rays(rays, nthreads=RAY_THREADS)
         t_hit = ans["t_hit"].numpy().astype(np.float64)
         prim = ans["primitive_ids"].numpy().astype(np.int64)
         hit = prim != NO_HIT
@@ -91,7 +98,7 @@ def render_scene(
             o3d.core.Tensor(np.ascontiguousarray(model.faces.astype(np.uint32))),
         )
     rays = _pinhole_rays(K, np.eye(4), w, h)
-    ans = scene.cast_rays(rays)
+    ans = scene.cast_rays(rays, nthreads=RAY_THREADS)
     geom = ans["geometry_ids"].numpy().astype(np.int64)
     hit = geom != NO_HIT
     t_hit = ans["t_hit"].numpy().astype(np.float64)

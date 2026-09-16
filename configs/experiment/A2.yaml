@@ -1,0 +1,11 @@
+# @package _global_
+# A2 — does depth help? (RQ-A): CNOS masks -> FoundPose coarse pose -> pt2plane refinement + gate -> evaluate
+defaults:
+  - override /segmenter: cnos
+  - override /estimator: foundpose
+  - override /refiner: pt2plane
+
+experiment:
+  name: A2
+  question: "does depth help? (RQ-A)"
+stages: [segment, coarse_pose, refine, evaluate]

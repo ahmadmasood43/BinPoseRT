@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 from hydra import compose, initialize_config_dir
 
@@ -308,3 +309,34 @@ def test_context_uses_targets_file_when_configured(tmp_path):
     assert ctx.dataset.targets is not None
     assert len(ctx.dataset.scene_ids) == 20 and len(ctx.dataset.image_ids(1)) == 50
     assert ctx.dataset.target_object_ids(1, 1) == [2, 25, 29, 30]
+
+
+def test_refine_stage_improves_noisy_coarse_poses_on_the_fixture(tmp_path):
+    base = (
+        "experiment=smoke",
+        f"outputs_root={tmp_path}",
+        "estimator.params.t_sigma_mm=4",
+        "estimator.params.r_sigma_deg=6",
+        "evaluate.with_vsd=false",
+    )
+    before = run(_compose(*base), repo_root=REPO)
+    after = run(_compose(*base, "stages=[segment,coarse_pose,refine,evaluate]"), repo_root=REPO)
+    rep_b = json.loads((before.refs["evaluate"].dir / "report.json").read_text())
+    rep_a = json.loads((after.refs["evaluate"].dir / "report.json").read_text())
+    assert rep_b["ar_mssd"] < 0.95 and rep_a["ar_mssd"] > rep_b["ar_mssd"] + 0.1
+    assert after.refs["coarse_pose"].dir == before.refs["coarse_pose"].dir  # upstream reused
+    ref_dir = after.refs["refine"].dir
+    details = pd.read_parquet(ref_dir / "refine_details.parquet")
+    assert len(details) == 12 and details["accepted"].sum() >= 11  # one occluded instance is gated
+    assert np.isfinite(details["z_shift_mm"]).all() and (details["z_init_overlap"] > 0).all()
+    summary = json.loads((ref_dir / "refine_summary.json").read_text())
+    assert summary["n_hypotheses"] == 12 and summary["rejection_rate"] <= 1 / 12
+    hyps = read_hypotheses_table(ref_dir)
+    assert (hyps["stage"] == "refined").all() and hyps["icp_fitness"].min() > 0.9
+    assert hyps["source"].str.endswith("+point_to_plane").all()
+    # a different refiner config re-uses coarse_pose and gets its own refine directory
+    gicp = run(
+        _compose(*base, "stages=[segment,coarse_pose,refine,evaluate]", "refiner=gicp"),
+        repo_root=REPO,
+    )
+    assert gicp.refs["refine"].dir != ref_dir and gicp.manifest.stages["coarse_pose"]["cached"]

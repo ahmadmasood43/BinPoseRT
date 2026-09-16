@@ -84,7 +84,7 @@ def _evaluate_scene(
             object_ids = sorted({g.object_id for g in gts})
         for object_id in object_ids:
             gts_obj = [g for g in gts if g.object_id == object_id]
-            valid = _valid_ground_truth(dataset, scene_id, image_id, object_id, gts_obj)
+            valid = valid_ground_truth(dataset, scene_id, image_id, object_id, gts_obj)
             if not valid:
                 continue
             model = dataset.load_model(object_id)
@@ -166,9 +166,9 @@ def evaluate_localisation(
     scene_ids = dataset.scene_ids
     jobs = [(sid, by_key, dataset, n_model_points, with_vsd) for sid in scene_ids]
     if n_workers > 1 and len(scene_ids) > 1:
-        import multiprocessing as mp
+        from binposert.pipeline.pool import scene_pool
 
-        with mp.get_context("spawn").Pool(min(n_workers, len(scene_ids))) as pool:
+        with scene_pool(min(n_workers, len(scene_ids))) as pool:
             results = pool.starmap(_evaluate_scene, jobs)
     else:
         results = [_evaluate_scene(*job) for job in jobs]
@@ -219,7 +219,7 @@ def evaluate_localisation(
     )
 
 
-def _valid_ground_truth(
+def valid_ground_truth(
     dataset: BopDataset,
     scene_id: int,
     image_id: int,

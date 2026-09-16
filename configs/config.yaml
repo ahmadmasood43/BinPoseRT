@@ -4,6 +4,7 @@ defaults:
   - dataset: tless
   - segmenter: gt
   - estimator: foundpose
+  - refiner: pt2plane
   - experiment: null
 
 experiment:

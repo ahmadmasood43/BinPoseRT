@@ -19,7 +19,7 @@ anything slips. Finalisation is protected: it never shrinks to absorb overrun.
 |---|---|---|---|---|---|---|
 | 1 | **Foundations** | 0 | — 2026-09-12 | laptop | — | **done 2026-09-12** |
 | 2 | **Alpha** — baseline | 1–3 | 2026-09-14 → 2026-10-04 | GPU (adapters once), then laptop | A0, A1, A5 | **done 2026-09-15** |
-| 3 | **Beta** — refinement | 4–6 | 2026-10-05 → 2026-10-25 | laptop | A2, A3, A4 | not started |
+| 3 | **Beta** — refinement | 4–6 | 2026-10-05 → 2026-10-25 | GPU machine (CPU only, from Alpha's caches) | A2, A3, A4 | **done 2026-09-16** |
 | 4 | **Gamma** — multi-view | 7–9 | 2026-10-26 → 2026-11-15 | laptop (cached GPU outputs) | A6, A7 | not started |
 | 5 | **Delta** — reliability | 10–12 | 2026-11-16 → 2026-12-06 | laptop | A8 | not started |
 | 6a | **Epsilon** — active view *(stretch)* | 13–14 | 2026-12-07 → 2026-12-20 | laptop | A9 | not started |
@@ -34,7 +34,7 @@ gantt
     section Must-have
     Foundations            :done,    m1, 2026-09-07, 2026-09-12
     Alpha (baseline)       :done,    m2, 2026-09-14, 2026-09-15
-    Beta (refinement)      :         m3, 2026-10-05, 2026-10-25
+    Beta (refinement)      :done,    m3, 2026-09-15, 2026-09-16
     Gamma (multi-view)     :         m4, 2026-10-26, 2026-11-15
     Delta (reliability)    :         m5, 2026-11-16, 2026-12-06
     section Stretch
@@ -173,47 +173,80 @@ evaluate}/…` cached · A0/A1/A5 AR table · failure galleries for all three ro
 
 ## Milestone 3 — Beta: depth-based refinement
 
-**Weeks 4–6 · 2026-10-05 → 2026-10-25 · A2, A3, A4 · answers RQ-A, RQ-B**
+**Weeks 4–6 · 2026-10-05 → 2026-10-25 · A2, A3, A4 · answers RQ-A, RQ-B · done 2026-09-16 (ahead of plan)**
 
 **Goal.** A Refinement stage that improves coarse hypotheses with depth, rejects its own failures through
 an independent gate, and is measured before/after by initial-error and visibility regime.
 
+**Result.** T-LESS official AR 35.4 → **47.8** (A2, point-to-plane); robust 47.9, GICP 47.3. Most of the
+gain is a depth initialisation of the translation added during the milestone; the D8 silhouette gate
+turned out to reject good candidates and was demoted to a signal. Full write-up:
+[`results_beta_tless.md`](results_beta_tless.md); every decision taken on the way, with its evidence:
+[`milestone_beta_decision.md`](milestone_beta_decision.md).
+
 ### Tasks
 
 Week 4 — Geometry
-- [ ] `binposert/refine/`: depth → cloud, visibility-aware model crop (render at coarse pose, keep visible
+- [x] `binposert/refine/`: depth → cloud, visibility-aware model crop (render at coarse pose, keep visible
       surface), masked scene cloud extraction
-- [ ] ICP variants behind one signature: point-to-plane, robust (Tukey/Huber), GICP (Open3D)
-- [ ] Synthetic tests: small perturbation recovered; large perturbation → rejected; noise sweep
+- [x] ICP variants behind one signature: point-to-plane, robust (Tukey/Huber), GICP (Open3D)
+- [x] Synthetic tests: small perturbation recovered; large perturbation → rejected; noise sweep
+- [x] *Added:* translation initialisation from depth along the viewing ray (`refine/depth_init.py`) —
+      FoundPose coarse poses are right in the image and wrong in depth (median 25 mm, 52 % beyond 0.25 d)
 
 Week 5 — Gate and signals
-- [ ] Acceptance gate (D8): rendered-silhouette IoU + boundary error vs Detection mask; displacement cap
+- [x] Acceptance gate (D8): rendered-silhouette IoU + boundary error vs Detection mask; displacement cap
       `α = 0.25 · diameter`, `β = 30°` symmetry-aware; rejection returns the coarse hypothesis with
       `rejection_reason`
-- [ ] QualitySignals populated: registration fitness, RMSE, depth coverage, silhouette IoU, displacement
-- [ ] Tune α, β on T-LESS *val* only; record chosen values in `configs/refiners/`
-- [ ] Tests: gate rejects a wrong-but-converged ICP result; symmetry-aware rotation cap on obj 1 (cylinder)
+- [x] QualitySignals populated: registration fitness, RMSE, depth coverage, silhouette IoU, displacement
+- [x] Tune α, β on T-LESS *val* only (scenes 1, 6, 11, 16; checked on the other 16); record chosen values
+      in `configs/refiner/` — the sweep also covered the silhouette and fitness thresholds: α 0.6, β 90°,
+      silhouette checks off (signals only), fitness ≥ 0.3
+- [x] Tests: gate rejects a wrong-but-converged ICP result; symmetry-aware rotation cap on obj 1 (cylinder)
 
 Week 6 — Experiments and closure
-- [ ] `configs/experiments/A2.yaml A3.yaml A4.yaml`; run on T-LESS from Alpha's caches
-- [ ] Stratified before/after: AR by initial-error bin [0, 5), [5, 10), [10, 20), [20, ∞) mm × visibility bin
-- [ ] Gate rejection rate and *precision of rejection* (how often a rejection was the right call)
-- [ ] Pick "best" registration variant for downstream configs; justify in DECISIONS.md D8 change log
-- [ ] Failure gallery: refinement made it worse (accepted), refinement rejected a good pose
+- [x] `configs/experiment/A2.yaml A3.yaml A4.yaml`; run on T-LESS from Alpha's caches (`tools/run_beta.sh`)
+- [x] *Added:* `configs/experiment/A5r.yaml` — the matrix's "best" refine column for A5 (`ONLY=A5r BEFORE=A5 tools/run_beta.sh`)
+- [x] Stratified before/after: AR by initial-error bin [0, 5), [5, 10), [10, 20), [20, ∞) mm × visibility bin,
+      tables + figure (`binposert/evaluate/refinement.py`, `tools/refine_report.py`)
+- [x] Gate rejection rate and *precision of rejection* (strict and at the 0.1 d success level), per check
+- [x] Pick "best" registration variant for downstream configs; justify in DECISIONS.md D8 change log —
+      point-to-plane (tied best, fastest)
+- [x] Failure gallery: refinement made it worse (accepted), refinement rejected a good pose
+      (`binposert/viz/refine_gallery.py`)
 
 ### Exit criterion
 Before/after refinement AR on T-LESS, stratified by initial-error bin and visibility; gate rejection
-rate reported.
+rate reported. **Met:** [`results_beta_tless.md`](results_beta_tless.md) — AR by initial error
+93.5 → 84.5 / 86.6 → 85.5 / 75.0 → 85.9 / 19.6 → 37.3 (core, all scenes), × visibility; rejection rate
+7.5 % (tuned gate) vs 30.7 % (D8 default), precision of rejection 99.7 % at the success level.
 
 ### Deliverables
 `binposert/refine/` · A2/A3/A4 stratified tables + plots · chosen defaults for α, β and registration
-variant · gallery.
+variant · gallery. All delivered: tables and the strata figure in `results_beta_tless.md`
+(`figures/beta_strata_tless.png`), galleries under each refine stage's `analysis/` (two in `figures/`),
+defaults in `configs/refiner/*.yaml`.
+
+### What was learned (beyond the plan)
+- Open3D 0.19's parallel raycaster corrupts its output under multi-process load; rendering is
+  single-threaded per worker now (D8 renderer note), and the evaluate stage was re-run for A1.
+- The refinement's remaining regressions are the already-good poses (within 5 mm: 93.5 → 84.5) and
+  wrong-instance detections. The first has a cause: ICP moves near-perfect poses by a constant
+  ~2.5 mm along camera y (same for both estimators; fitness/RMSE look perfect) — a depth↔RGB offset of
+  the T-LESS Primesense data. Not corrected in Beta (would mean tuning against test GT); Gamma should
+  estimate it GT-free from depth/RGB edge alignment.
+- *Added row A5r* (CNOS → MegaPose → Beta stage): 48.2 → 46.9 official AR. The depth initialisation
+  helps MegaPose too (42 → 61 % per-hypothesis success) but ICP gives a third back through the same
+  offset, and MegaPose has far more already-good poses to damage. Estimator dependency answered: the
+  stage is for RGB-only coarse poses; on a depth-aware estimator only the initialisation is worth keeping.
+- Costs: 0.8–1.0 s per hypothesis single-threaded (≈ 5 renders + 3 ICP stages); the Delta update-path
+  budget (p95 < 200 ms) will need a GPU renderer or a smaller crop.
 
 ### Risks specific to this milestone
-| Risk | Response |
-|---|---|
-| Depth refinement hurts on average (§5) | The stratified table is the result either way; the gate's job is to make the *accepted* subset better. Report the regimes where it helps. |
-| Three registration variants take too long | A3 and A4 are cuttable to one variant; A2 (point-to-plane) is the must-have. |
+| Risk | Response | Outcome |
+|---|---|---|
+| Depth refinement hurts on average (§5) | The stratified table is the result either way; the gate's job is to make the *accepted* subset better. Report the regimes where it helps. | Helps on average (+12 AR); hurts only the < 5 mm regime, reported. |
+| Three registration variants take too long | A3 and A4 are cuttable to one variant; A2 (point-to-plane) is the must-have. | All three ran (8 min per row on 15 cores). |
 
 ---
 

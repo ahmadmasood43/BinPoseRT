@@ -37,6 +37,7 @@ def load_row(exp: str, dataset: str, outputs: Path) -> dict[str, Any] | None:
         "segmenter": cfg["segmenter"]["name"],
         "estimator": cfg["estimator"]["name"],
         "evaluate_dir": str(ev.relative_to(REPO)) if ev.is_relative_to(REPO) else str(ev),
+        "evaluate_dir_abs": str(ev),
         "git_commit": manifest.get("git_commit"),
         "report": report,
         "official": official,

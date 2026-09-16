@@ -1,0 +1,13 @@
+# @package _global_
+# A5r — estimator dependency of the refinement (Beta follow-up to A5): CNOS masks -> MegaPose coarse pose
+# (with its own RGB refiner) -> depth init + pt2plane refinement + gate -> evaluate. A5 itself stays the
+# un-refined Alpha comparator; the ablation matrix's "best" refine column for A5 is this row.
+defaults:
+  - override /segmenter: cnos
+  - override /estimator: megapose
+  - override /refiner: pt2plane
+
+experiment:
+  name: A5r
+  question: "does depth refinement add on top of MegaPose's refiner? (estimator dependency)"
+stages: [segment, coarse_pose, refine, evaluate]

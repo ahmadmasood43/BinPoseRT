@@ -1,0 +1,11 @@
+# @package _global_
+# A3 — robust loss in clutter (RQ-B): CNOS masks -> FoundPose coarse pose -> robust refinement + gate -> evaluate
+defaults:
+  - override /segmenter: cnos
+  - override /estimator: foundpose
+  - override /refiner: robust
+
+experiment:
+  name: A3
+  question: "robust loss in clutter (RQ-B)"
+stages: [segment, coarse_pose, refine, evaluate]

@@ -58,7 +58,7 @@ def run(cfg: DictConfig | dict[str, Any], repo_root: str | Path | None = None) -
     config_hash = canonical_json(
         {
             k: ctx.cfg[k]
-            for k in ("dataset", "segmenter", "estimator", "evaluate", "stages")
+            for k in ("dataset", "segmenter", "estimator", "refiner", "evaluate", "stages")
             if k in ctx.cfg
         }
     )

@@ -1,0 +1,11 @@
+# @package _global_
+# A4 — registration comparison (RQ-B): CNOS masks -> FoundPose coarse pose -> gicp refinement + gate -> evaluate
+defaults:
+  - override /segmenter: cnos
+  - override /estimator: foundpose
+  - override /refiner: gicp
+
+experiment:
+  name: A4
+  question: "registration comparison (RQ-B)"
+stages: [segment, coarse_pose, refine, evaluate]

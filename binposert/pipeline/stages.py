@@ -54,7 +54,7 @@ STAGE_ORDER = [
     "nbv",
     "evaluate",
 ]
-STAGE_VERSIONS = {"segment": "1", "coarse_pose": "1", "evaluate": "6"}
+STAGE_VERSIONS = {"segment": "1", "coarse_pose": "1", "refine": "4", "evaluate": "7"}
 
 
 class ExternalStageMissing(RuntimeError):
@@ -195,6 +195,30 @@ def coarse_pose_stage(ctx: StageContext, out_dir: Path, upstream: dict[str, Stag
     write_hypotheses(out_dir, recs)
 
 
+def refine_stage(ctx: StageContext, out_dir: Path, upstream: dict[str, StageRef]) -> None:
+    from binposert.pipeline.refine_stage import params_from_config, run_refine
+
+    section = ctx.cfg["refiner"]
+    n_workers = int(section.get("n_workers", 0)) or max(1, (os.cpu_count() or 2) - 1)
+    summary = run_refine(
+        ctx.dataset,
+        upstream["segment"].dir,
+        upstream["coarse_pose"].dir,
+        out_dir,
+        params_from_config(section),
+        n_workers=n_workers,
+    )
+    with open(out_dir / "refine_summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
+    log.info(
+        "refined %d hypotheses, rejection rate %.3f (%s), median %.3f s",
+        summary["n_hypotheses"],
+        summary["rejection_rate"],
+        summary["reasons"],
+        summary["median_seconds"],
+    )
+
+
 def evaluate_stage(ctx: StageContext, out_dir: Path, upstream: dict[str, StageRef]) -> None:
     section = ctx.cfg["evaluate"]
     source = upstream.get("refine") or upstream["coarse_pose"]
@@ -306,13 +330,15 @@ def format_summary(s: dict[str, Any]) -> str:
 STAGES: dict[str, StageFn] = {
     "segment": segment_stage,
     "coarse_pose": coarse_pose_stage,
+    "refine": refine_stage,
     "evaluate": evaluate_stage,
 }
 
 STAGE_INPUTS: dict[str, list[str]] = {
     "segment": [],
     "coarse_pose": ["segment"],
-    "evaluate": ["coarse_pose"],
+    "refine": ["segment", "coarse_pose"],
+    "evaluate": ["coarse_pose", "refine"],
 }
 
 
@@ -321,6 +347,8 @@ def stage_config(cfg: dict[str, Any], stage: str) -> dict[str, Any]:
         return hashable_config(cfg["segmenter"])
     if stage == "coarse_pose":
         return hashable_config(cfg["estimator"])
+    if stage == "refine":
+        return hashable_config(cfg["refiner"])
     return hashable_config(cfg.get(stage, {}))
 
 
