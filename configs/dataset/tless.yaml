@@ -5,3 +5,7 @@ bop_split: test               # split name used by bop_toolkit and in BOP result
 models_dir: models_eval       # BOP evaluation models (metrics); estimators render models_cad
 targets: test_targets_bop19.json
 continuous_symmetry_steps: 36
+# Depth↔RGB registration offset of the Primesense data, estimated GT-free from depth-edge / RGB-edge
+# alignment on val scenes {1, 6, 11, 16} (tools/depth_rgb_offset.py, Gamma): the depth map sits
+# 3.3 px too low. Beta measured the consequence as ICP converging 2.5 mm below GT (B20).
+depth_shift_px: [-0.19, -3.28]  # applied from Gamma on (decision G12); null = raw sensor depth

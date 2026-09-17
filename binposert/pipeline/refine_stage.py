@@ -22,7 +22,7 @@ from binposert.pipeline.artefacts import (
     read_hypotheses_table,
     transform_to_columns,
 )
-from binposert.pipeline.pool import scene_pool
+from binposert.pipeline.pool import map_scenes
 from binposert.refine import GateParams, Refiner, RefinerParams
 
 DETAILS_FILE = "refine_details.parquet"
@@ -134,8 +134,7 @@ def run_refine(
     scene_ids = dataset.scene_ids
     jobs = [(sid, dataset, str(seg_dir), str(pose_dir), params) for sid in scene_ids]
     if n_workers > 1 and len(scene_ids) > 1:
-        with scene_pool(min(n_workers, len(scene_ids))) as pool:
-            results = pool.starmap(refine_scene, jobs)
+        results = map_scenes(refine_scene, jobs, n_workers)
     else:
         results = [refine_scene(*job) for job in jobs]
     rows = [r for rows_, _ in results for r in rows_]

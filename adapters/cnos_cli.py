@@ -107,6 +107,17 @@ def render_templates(args: AdapterArgs, dataset_name: str) -> Path:
     return tdir
 
 
+def template_object_ids(template_dir: Path) -> list[int]:
+    """Object ids in the order CNOS indexes its templates (sorted ``obj_XXXXXX`` directories).
+    CNOS reports ``category_id = index + 1``, which equals the object id only when ids are
+    contiguous from 1 (T-LESS); XYZ-IBD's ids have gaps."""
+    return sorted(
+        int(d.name[4:10])
+        for d in template_dir.iterdir()
+        if d.is_dir() and d.name.startswith("obj_")
+    )
+
+
 def build_model(args: AdapterArgs, template_dir: Path, dataset_name: str):  # type: ignore[no-untyped-def]
     import torch
     from hydra import compose, initialize_config_dir
@@ -143,6 +154,11 @@ def build_model(args: AdapterArgs, template_dir: Path, dataset_name: str):  # ty
 
     model = instantiate(cfg.model)
     model.ref_dataset = ref_dataset
+    if dataset_name not in cfg.data.datasets:
+        # datasets unknown to CNOS bop.yaml (XYZ-IBD camera views): names from the templates
+        cfg.data.datasets[dataset_name] = {
+            "obj_names": [f"{oid:03d}_obj" for oid in template_object_ids(template_dir)]
+        }
     model.ref_obj_names = cfg.data.datasets[dataset_name].obj_names
     model.dataset_name = dataset_name
     seg_name = cfg.model.segmentor_model._target_.split(".")[-1]
@@ -166,6 +182,7 @@ def run(args: AdapterArgs) -> None:
     dataset_name = args.dataset_root.name
     prepare_layout(args, dataset_name)
     template_dir = render_templates(args, dataset_name)
+    object_ids = template_object_ids(template_dir)
     model, cfg = build_model(args, template_dir, dataset_name)
 
     from binposert.pipeline.artefacts import DetectionRecord, DetectionWriter, camera_id_for
@@ -196,9 +213,13 @@ def run(args: AdapterArgs) -> None:
             scores = np.asarray(data["score"], dtype=np.float64)
             order = np.argsort(-scores, kind="stable")
             runtime = float(data["time"])
+            # read each array once: an NpzFile member is re-read and decompressed on every access
+            # (500 MB of masks per image at 1440 x 1080 — 80 accesses cost 70 s)
+            segmentation = np.asarray(data["segmentation"])
+            category_ids = np.asarray(data["category_id"])
             det_id = 0
             for k in order:
-                mask = np.asarray(data["segmentation"][k]).astype(bool)
+                mask = np.asarray(segmentation[k]).astype(bool)
                 if mask.sum() < min_pixels:
                     continue
                 writer.add(
@@ -207,7 +228,7 @@ def run(args: AdapterArgs) -> None:
                         image_id,
                         Detection(
                             camera_id=camera_id_for(image_id),
-                            object_id=int(data["category_id"][k]),
+                            object_id=object_ids[int(category_ids[k]) - 1],
                             mask=mask,
                             score=float(scores[k]),
                             detection_id=det_id,

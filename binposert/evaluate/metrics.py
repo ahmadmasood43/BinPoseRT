@@ -69,12 +69,25 @@ def vsd(
 
     Returns an array with one VSD value per tau in [0, 1]. Depth images are in mm.
     """
-    taus = np.atleast_1d(np.asarray(tau_mm, dtype=np.float64))
     size = depth_test.shape
     ray = _ray_length_factor(K, size)
-    dist_test = depth_test * ray
     dist_est = renderer.render(T_est, K, size).depth * ray
     dist_gt = renderer.render(T_gt, K, size).depth * ray
+    return vsd_from_distances(dist_est, dist_gt, depth_test * ray, delta_mm, tau_mm)
+
+
+def vsd_from_distances(
+    dist_est: F64,
+    dist_gt: F64,
+    dist_test: F64,
+    delta_mm: float = 15.0,
+    tau_mm: float | npt.ArrayLike = 20.0,
+) -> F64:
+    """:func:`vsd` on pre-rendered *distance* images (``depth * ray length factor``), so a caller
+    scoring every candidate against every ground-truth pose of an image renders each pose once
+    instead of once per pair (the evaluate stage: n_candidates + n_gt renders instead of
+    n_candidates × n_gt × 2)."""
+    taus = np.atleast_1d(np.asarray(tau_mm, dtype=np.float64))
     missing = dist_test <= 0
     vis_gt = (dist_gt > 0) & (((dist_gt - dist_test) <= delta_mm) | missing)
     vis_est = (dist_est > 0) & (((dist_est - dist_test) <= delta_mm) | missing)

@@ -1,0 +1,15 @@
+# @package _global_
+# A6 — does fusing calibrated views help? (RQ-C): CNOS -> FoundPose -> pt2plane refinement ->
+# association over view groups -> weighted SE(3) mean. n_views and the fusion row are overridden
+# per point of the AR-vs-views curve: multiview.params.groups.n_views=k fusion={none,best,mean}
+defaults:
+  - override /segmenter: cnos
+  - override /estimator: foundpose
+  - override /refiner: pt2plane
+  - override /multiview: strided
+  - override /fusion: mean
+
+experiment:
+  name: A6
+  question: "does fusing calibrated views help? (RQ-C)"
+stages: [segment, coarse_pose, refine, associate, fuse, evaluate]

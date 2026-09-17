@@ -54,7 +54,14 @@ STAGE_ORDER = [
     "nbv",
     "evaluate",
 ]
-STAGE_VERSIONS = {"segment": "1", "coarse_pose": "1", "refine": "4", "evaluate": "7"}
+STAGE_VERSIONS = {
+    "segment": "1",
+    "coarse_pose": "1",
+    "refine": "4",
+    "associate": "1",
+    "fuse": "1",
+    "evaluate": "8",
+}
 
 
 class ExternalStageMissing(RuntimeError):
@@ -80,6 +87,15 @@ StageFn = Callable[[StageContext, Path, dict[str, StageRef]], None]
 
 
 # ----------------------------------------------------------------------------- helpers
+
+
+def default_workers() -> int:
+    """``n_workers: 0`` in a stage config: half the logical cores, at least one. Gamma ran 15
+    workers on a 16-thread machine next to a GPU stage for hours and the host crashed five times in
+    four days (docs/milestone_gamma_decision.md G21); half the cores keeps the thermal and memory
+    load of a stage where a shared workstation can sustain it. Set ``n_workers`` explicitly to
+    use more."""
+    return max(1, (os.cpu_count() or 2) // 2)
 
 
 def hashable_config(section: dict[str, Any]) -> dict[str, Any]:
@@ -199,7 +215,7 @@ def refine_stage(ctx: StageContext, out_dir: Path, upstream: dict[str, StageRef]
     from binposert.pipeline.refine_stage import params_from_config, run_refine
 
     section = ctx.cfg["refiner"]
-    n_workers = int(section.get("n_workers", 0)) or max(1, (os.cpu_count() or 2) - 1)
+    n_workers = int(section.get("n_workers", 0)) or default_workers()
     summary = run_refine(
         ctx.dataset,
         upstream["segment"].dir,
@@ -219,25 +235,73 @@ def refine_stage(ctx: StageContext, out_dir: Path, upstream: dict[str, StageRef]
     )
 
 
+def associate_stage(ctx: StageContext, out_dir: Path, upstream: dict[str, StageRef]) -> None:
+    from binposert.pipeline.multiview_stage import associate_params_from_config, run_associate
+
+    source = upstream.get("refine") or upstream["coarse_pose"]
+    summary = run_associate(
+        ctx.dataset, source.dir, out_dir, associate_params_from_config(ctx.cfg["multiview"])
+    )
+    with open(out_dir / "associate_summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
+    log.info(
+        "%d groups of %d views -> %d tracks from %d hypotheses (views per track %s)",
+        summary["n_groups"],
+        summary["n_views"],
+        summary["n_tracks"],
+        summary["n_hypotheses"],
+        summary["views_per_track"],
+    )
+
+
+def fuse_stage(ctx: StageContext, out_dir: Path, upstream: dict[str, StageRef]) -> None:
+    from binposert.pipeline.multiview_stage import fuse_params_from_config, run_fuse
+
+    section = ctx.cfg["fusion"]
+    n_workers = int(section.get("n_workers", 0)) or default_workers()
+    summary = run_fuse(
+        ctx.dataset,
+        upstream["segment"].dir,
+        upstream["associate"].dir,
+        out_dir,
+        fuse_params_from_config(section),
+        n_workers=n_workers,
+    )
+    with open(out_dir / "fuse_summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
+    log.info("fused %d tracks (%s): %s", summary["n_tracks"], summary["method"], summary)
+
+
 def evaluate_stage(ctx: StageContext, out_dir: Path, upstream: dict[str, StageRef]) -> None:
     section = ctx.cfg["evaluate"]
-    source = upstream.get("refine") or upstream["coarse_pose"]
+    source = upstream.get("fuse") or upstream.get("refine") or upstream["coarse_pose"]
     table = read_hypotheses_table(source.dir)
+    images: set[tuple[int, int]] | None = None
+    if source.stage == "fuse":
+        # multi-view rows are scored on the images of their view groups only
+        from binposert.pipeline.multiview_stage import GROUPS_FILE
+
+        with open(source.dir / GROUPS_FILE) as f:
+            groups = json.load(f)
+        images = {(int(s), int(i)) for s, gs in groups.items() for g in gs for i in g}
+        write_targets_subset(ctx.dataset, images, out_dir / TARGETS_SUBSET_FILE)
     preds, times = predictions_from_table(
         table, score_signal=section.get("score_signal", "pose_score")
     )
     ds = ctx.dataset
     method = section.get("method_name", "binposert")
-    csv_path = out_dir / f"{method}_{ds.name}-{ctx.dataset_cfg.get('bop_split', ds.split)}.csv"
+    bop_name = ctx.dataset_cfg.get("bop_name") or ds.name  # bop_toolkit's dataset name
+    csv_path = out_dir / f"{method}_{bop_name}-{ctx.dataset_cfg.get('bop_split', ds.split)}.csv"
     write_bop_csv(csv_path, preds)
 
-    n_workers = int(section.get("n_workers", 0)) or max(1, (os.cpu_count() or 2) - 1)
+    n_workers = int(section.get("n_workers", 0)) or default_workers()
     report = evaluate_localisation(
         preds,
         ds,
         n_model_points=int(section.get("n_model_points", 2000)),
         with_vsd=bool(section.get("with_vsd", True)),
         n_workers=n_workers,
+        images=images,
     )
     rows = pd.DataFrame(report.rows)
     rows.to_parquet(out_dir / "gt_rows.parquet", index=False)
@@ -247,6 +311,7 @@ def evaluate_stage(ctx: StageContext, out_dir: Path, upstream: dict[str, StageRe
         "method": method,
         "bop_csv": csv_path.name,
         "n_predictions": len(preds),
+        "n_images": len(images) if images is not None else None,
         "n_gt": report.n_gt,
         "ar": report.ar,
         "ar_vsd": report.ar_vsd,
@@ -268,6 +333,27 @@ def evaluate_stage(ctx: StageContext, out_dir: Path, upstream: dict[str, StageRe
         report.ar_mspd,
         report.n_gt,
     )
+
+
+TARGETS_SUBSET_FILE = "targets_subset.json"
+
+
+def write_targets_subset(ds: BopDataset, images: set[tuple[int, int]], path: Path) -> None:
+    """The dataset's BOP targets restricted to ``images`` so ``tools/bop_eval.sh`` (bop_toolkit)
+    scores exactly the ground truth the core evaluator scored."""
+    items: list[dict[str, int]] = []
+    if ds.targets is not None:
+        for (sid, iid), objs in sorted(ds.targets.items()):
+            if (sid, iid) in images:
+                items.extend(
+                    {"scene_id": sid, "im_id": iid, "obj_id": oid, "inst_count": n}
+                    for oid, n in sorted(objs.items())
+                )
+    else:
+        for sid, iid in sorted(images):
+            items.append({"scene_id": sid, "im_id": iid})
+    with open(path, "w") as f:
+        json.dump(items, f)
 
 
 def predictions_from_table(
@@ -331,6 +417,8 @@ STAGES: dict[str, StageFn] = {
     "segment": segment_stage,
     "coarse_pose": coarse_pose_stage,
     "refine": refine_stage,
+    "associate": associate_stage,
+    "fuse": fuse_stage,
     "evaluate": evaluate_stage,
 }
 
@@ -338,8 +426,13 @@ STAGE_INPUTS: dict[str, list[str]] = {
     "segment": [],
     "coarse_pose": ["segment"],
     "refine": ["segment", "coarse_pose"],
-    "evaluate": ["coarse_pose", "refine"],
+    "associate": ["coarse_pose", "refine"],
+    "fuse": ["segment", "associate"],
+    "evaluate": ["coarse_pose", "refine", "fuse"],
 }
+
+
+DEPTH_STAGES = ("refine", "fuse", "evaluate")
 
 
 def stage_config(cfg: dict[str, Any], stage: str) -> dict[str, Any]:
@@ -348,8 +441,18 @@ def stage_config(cfg: dict[str, Any], stage: str) -> dict[str, Any]:
     if stage == "coarse_pose":
         return hashable_config(cfg["estimator"])
     if stage == "refine":
-        return hashable_config(cfg["refiner"])
-    return hashable_config(cfg.get(stage, {}))
+        section = hashable_config(cfg["refiner"])
+    elif stage == "associate":
+        section = hashable_config(cfg["multiview"])
+    elif stage == "fuse":
+        section = hashable_config(cfg["fusion"])
+    else:
+        section = hashable_config(cfg.get(stage, {}))
+    # a depth↔RGB shift in the dataset config changes what every depth-reading stage sees
+    shift = cfg.get("dataset", {}).get("depth_shift_px")
+    if stage in DEPTH_STAGES and shift:
+        section = {**section, "depth_shift_px": [float(x) for x in shift]}
+    return section
 
 
 # ----------------------------------------------------------------------------- runner

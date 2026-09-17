@@ -80,3 +80,48 @@ def test_look_at_camera_sees_origin_in_image_centre():
     r = MeshRenderer.from_model(box).render(T_camera_object, K, (240, 320))
     ys, xs = np.nonzero(r.mask)
     assert abs(xs.mean() - 160) < 3 and abs(ys.mean() - 120) < 3
+
+
+def test_corrupted_cast_is_retried_then_fails_loudly(monkeypatch):
+    """Open3D's cast_rays occasionally returns garbage under load (Beta/Gamma finding): an invalid
+    answer is re-cast; a persistently invalid one raises instead of propagating garbage indices."""
+    import open3d as o3d
+
+    from binposert.render import raycast
+    from tests.synth import box_model, simple_K
+
+    renderer = raycast.MeshRenderer.from_model(box_model())
+    K = simple_K()
+    T = np.eye(4)
+    T[2, 3] = 400.0
+    good = renderer.render(T, K, (240, 320))
+    real_scene = renderer._scene
+    real_cast = real_scene.cast_rays
+    calls = {"n": 0}
+
+    class Scene:  # pybind objects are read-only; wrap the scene instead
+        def __init__(self, cast):
+            self.cast_rays = cast
+
+    def flaky(rays, nthreads=1):
+        calls["n"] += 1
+        ans = real_cast(rays, nthreads=nthreads)
+        if calls["n"] == 1:  # first answer: primitive ids with a stray high bit
+            bad = ans["primitive_ids"].numpy().astype(np.int64)
+            bad[bad != raycast.NO_HIT] |= 1 << 21
+            ans["primitive_ids"] = o3d.core.Tensor(bad.astype(np.uint32))
+        return ans
+
+    monkeypatch.setattr(renderer, "_scene", Scene(flaky))
+    again = renderer.render(T, K, (240, 320))
+    assert calls["n"] == 2 and np.array_equal(again.mask, good.mask)
+    assert np.allclose(again.depth, good.depth)
+
+    def always_bad(rays, nthreads=1):
+        ans = real_cast(rays, nthreads=nthreads)
+        ans["t_hit"] = o3d.core.Tensor(np.zeros((3, 3), dtype=np.float32))
+        return ans
+
+    monkeypatch.setattr(renderer, "_scene", Scene(always_bad))
+    with pytest.raises(raycast.RenderCorrupted):
+        renderer.render(T, K, (240, 320))

@@ -340,3 +340,108 @@ def test_refine_stage_improves_noisy_coarse_poses_on_the_fixture(tmp_path):
         repo_root=REPO,
     )
     assert gicp.refs["refine"].dir != ref_dir and gicp.manifest.stages["coarse_pose"]["cached"]
+
+
+# ----------------------------------------------------------------------------- multi-view stages
+
+
+def test_multiview_stages_fuse_two_views_on_the_fixture(tmp_path):
+    base = (
+        "experiment=smoke",
+        f"outputs_root={tmp_path}",
+        "estimator.params.t_sigma_mm=4",
+        "estimator.params.r_sigma_deg=6",
+        "evaluate.with_vsd=false",
+        "multiview.params.groups.n_views=2",
+    )
+    mv = "stages=[segment,coarse_pose,associate,fuse,evaluate]"
+    single = run(_compose(*base, mv, "fusion=none"), repo_root=REPO)
+    mean = run(_compose(*base, mv, "fusion=mean"), repo_root=REPO)
+    best = run(_compose(*base, mv, "fusion=best"), repo_root=REPO)
+    assert mean.refs["associate"].dir == single.refs["associate"].dir  # association shared
+    assert mean.manifest.stages["associate"]["cached"]
+
+    assoc = mean.refs["associate"].dir
+    groups = json.loads((assoc / "groups.json").read_text())
+    assert groups == {"1": [[0, 1]], "2": [[0, 1]]}
+    tracks = pd.read_parquet(assoc / "tracks.parquet")
+    # 2 scenes x 3 objects, each seen in both Views -> 6 tracks of 2 members
+    sizes = tracks.groupby(["scene_id", "track_id"]).size()
+    assert len(sizes) == 6 and (sizes == 2).all()
+    assert (tracks.groupby(["scene_id", "track_id"]).object_id.nunique() == 1).all()
+    assert (tracks.groupby(["scene_id", "track_id"]).image_id.nunique() == 2).all()
+    summary = json.loads((assoc / "associate_summary.json").read_text())
+    assert summary["n_tracks"] == 6 and summary["n_gated_out"] > 0
+
+    fused = pd.read_parquet(mean.refs["fuse"].dir / "fused.parquet")
+    assert len(fused) == 6 and (fused.n_views == 2).all() and (fused.n_members == 2).all()
+    assert fused.dispersion_mm.between(0.5, 15).all()
+    hyps = read_hypotheses_table(mean.refs["fuse"].dir)
+    assert len(hyps) == 12 and hyps["source"].eq("fused:mean").all()
+    # the fused pose is one world pose: its two projections agree through the extrinsics
+    ds = BopDataset(REPO / "tests/fixtures/mini_bop", split="test")
+    for (sid, _tid), grp in hyps.groupby(["scene_id", "hypothesis_id"]):
+        worlds = []
+        for _, r in grp.iterrows():
+            view, _ = ds.load_view(int(sid), int(r.image_id), load_rgb=False, load_depth=False)
+            worlds.append(view.T_world_camera @ hypothesis_from_row(r).T_camera_object)
+        assert np.allclose(worlds[0], worlds[1], atol=1e-6)
+
+    rep = {
+        k: json.loads((r.refs["evaluate"].dir / "report.json").read_text())
+        for k, r in {"none": single, "mean": mean, "best": best}.items()
+    }
+    assert all(v["n_images"] == 4 and v["n_gt"] == 12 for v in rep.values())
+    assert rep["none"]["ar_mssd"] < 0.95  # the noisy single views leave room
+    assert rep["mean"]["ar_mssd"] >= rep["none"]["ar_mssd"]
+    assert rep["mean"]["ar_mssd"] >= rep["best"]["ar_mssd"] - 0.05
+
+    # joint polish on top of the mean: every track accepted, error shrinks to the ICP floor
+    joint = run(_compose(*base, mv, "fusion=mean_joint_icp", "fusion.n_workers=1"), repo_root=REPO)
+    fj = pd.read_parquet(joint.refs["fuse"].dir / "fused.parquet")
+    assert fj.joint_accepted.astype(bool).sum() >= 5 and fj.multiview_residual_mm.notna().all()
+    # every track of a group polishes against depth, not only the first (View cache keyed on depth)
+    assert (fj.joint_n_scene_points > 0).all() and not (fj.joint_reason == "no_depth").any()
+    rep_j = json.loads((joint.refs["evaluate"].dir / "report.json").read_text())
+    assert rep_j["ar_mssd"] >= rep["mean"]["ar_mssd"]
+    assert rep_j["ar_mssd"] > 0.95
+
+
+def test_extrinsic_noise_changes_the_association_hash_and_degrades_fusion(tmp_path):
+    base = (
+        "experiment=smoke",
+        f"outputs_root={tmp_path}",
+        "evaluate.with_vsd=false",
+        "multiview.params.groups.n_views=2",
+        "stages=[segment,coarse_pose,associate,fuse,evaluate]",
+    )
+    clean = run(_compose(*base), repo_root=REPO)
+    noisy = run(
+        _compose(
+            *base,
+            "multiview.params.extrinsic_noise.t_mm=10",
+            "multiview.params.extrinsic_noise.deg=2",
+        ),
+        repo_root=REPO,
+    )
+    assert noisy.refs["associate"].dir != clean.refs["associate"].dir
+    rep_c = json.loads((clean.refs["evaluate"].dir / "report.json").read_text())
+    rep_n = json.loads((noisy.refs["evaluate"].dir / "report.json").read_text())
+    assert rep_c["ar_mssd"] == pytest.approx(1.0)
+    assert rep_n["ar_mssd"] < rep_c["ar_mssd"]
+    fused = pd.read_parquet(noisy.refs["fuse"].dir / "fused.parquet")
+    assert fused.dispersion_mm.min() > 2.0  # the perturbation shows up as disagreement
+
+
+def test_strided_groups_cover_images_once():
+    from binposert.pipeline.multiview_stage import strided_groups
+
+    ids = list(range(50))
+    for k in (1, 2, 3, 4):
+        gs = strided_groups(ids, k)
+        flat = [i for g in gs for i in g]
+        assert len(gs) == 50 // k and all(len(g) == k for g in gs)
+        assert len(flat) == len(set(flat))
+        assert gs[0] == [j * (50 // k) for j in range(k)]
+    assert strided_groups(ids, 2, max_groups=3) == [[0, 25], [1, 26], [2, 27]]
+    assert strided_groups([1, 2], 3) == []

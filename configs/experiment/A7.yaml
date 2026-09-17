@@ -1,0 +1,14 @@
+# @package _global_
+# A7 — does a joint multi-view polish add to the mean? (RQ-C): A6 + joint ICP against the union
+# cloud of the group (D10 step 4).
+defaults:
+  - override /segmenter: cnos
+  - override /estimator: foundpose
+  - override /refiner: pt2plane
+  - override /multiview: strided
+  - override /fusion: mean_joint_icp
+
+experiment:
+  name: A7
+  question: "does a joint multi-view polish add to the mean? (RQ-C)"
+stages: [segment, coarse_pose, refine, associate, fuse, evaluate]

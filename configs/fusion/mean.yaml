@@ -1,0 +1,7 @@
+# D10 steps 2-3: symmetry-align to the highest-weight member, weighted Lie-algebra mean.
+name: mean
+version: 1
+params:
+  method: mean
+  mean_iterations: 5
+  project_to: all                 # all | members: which Views of the group receive the fused pose

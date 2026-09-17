@@ -1,0 +1,23 @@
+# Multi-view association (D10 step 1) over strided view groups: the n_views images of a group are
+# spread evenly through the scene's target image list, every image used at most once.
+name: strided
+version: 1
+params:
+  groups:
+    n_views: 2
+    source: targets              # targets | targets_multiview (BOP-25 multi-view targets file)
+    targets_multiview: ""
+    max_groups_per_scene: 0      # 0 = every disjoint group
+  association:
+    gate_t_factor: 0.5           # translation gate x diameter between a track and a hypothesis
+    gate_rot_deg: 45.0           # symmetry-aware rotation gate
+    rot_weight_mm_per_deg: 0.5   # Hungarian cost = mm + weight x deg
+    view_order: given            # given | most_hypotheses (which View seeds the tracks)
+  weights:                       # hand-set fusion weight = product of signal^exponent (D10)
+    exponents: {seg_score: 1.0, icp_fitness: 1.0, depth_coverage: 1.0, visible_fraction: 1.0}
+    rejected_factor: 0.2         # a Refinement-rejected (coarse) hypothesis still takes part
+    floor: 1.0e-3
+  extrinsic_noise:               # calibration-error sweep; 0 = the dataset's extrinsics
+    t_mm: 0.0
+    deg: 0.0
+    seed: 0

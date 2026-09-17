@@ -20,7 +20,7 @@ anything slips. Finalisation is protected: it never shrinks to absorb overrun.
 | 1 | **Foundations** | 0 | — 2026-09-12 | laptop | — | **done 2026-09-12** |
 | 2 | **Alpha** — baseline | 1–3 | 2026-09-14 → 2026-10-04 | GPU (adapters once), then laptop | A0, A1, A5 | **done 2026-09-15** |
 | 3 | **Beta** — refinement | 4–6 | 2026-10-05 → 2026-10-25 | GPU machine (CPU only, from Alpha's caches) | A2, A3, A4 | **done 2026-09-16** |
-| 4 | **Gamma** — multi-view | 7–9 | 2026-10-26 → 2026-11-15 | laptop (cached GPU outputs) | A6, A7 | not started |
+| 4 | **Gamma** — multi-view | 7–9 | 2026-10-26 → 2026-11-15 | GPU machine (CPU from caches; GPU once for XYZ-IBD) | A6, A7 | **done 2026-09-17** |
 | 5 | **Delta** — reliability | 10–12 | 2026-11-16 → 2026-12-06 | laptop | A8 | not started |
 | 6a | **Epsilon** — active view *(stretch)* | 13–14 | 2026-12-07 → 2026-12-20 | laptop | A9 | not started |
 | 6b | **Deployment** *(stretch)* | 13–14 | 2026-12-07 → 2026-12-20 | GPU machine | A10 | not started |
@@ -35,7 +35,7 @@ gantt
     Foundations            :done,    m1, 2026-09-07, 2026-09-12
     Alpha (baseline)       :done,    m2, 2026-09-14, 2026-09-15
     Beta (refinement)      :done,    m3, 2026-09-15, 2026-09-16
-    Gamma (multi-view)     :         m4, 2026-10-26, 2026-11-15
+    Gamma (multi-view)     :done,    m4, 2026-09-16, 2026-09-17
     Delta (reliability)    :         m5, 2026-11-16, 2026-12-06
     section Stretch
     Epsilon (active view)  :         m6, 2026-12-07, 2026-12-20
@@ -250,9 +250,9 @@ defaults in `configs/refiner/*.yaml`.
 
 ---
 
-## Milestone 4 — Gamma: multi-view association and fusion
+## Milestone 4 — Gamma: multi-view association and fusion ✅
 
-**Weeks 7–9 · 2026-10-26 → 2026-11-15 · A6, A7 + extrinsic perturbation sweep · answers RQ-C**
+**Weeks 7–9 · 2026-10-26 → 2026-11-15 · A6, A7 + extrinsic perturbation sweep · answers RQ-C · closed 2026-09-17**
 
 **Goal.** Repeated objects associated correctly across calibrated Views and fused into one symmetry-aligned
 `T_world_object` per ObjectTrack, with an AR-vs-views curve on XYZ-IBD.
@@ -260,37 +260,41 @@ defaults in `configs/refiner/*.yaml`.
 ### Tasks
 
 Week 7 — GPU session first, then geometry
-- [ ] Download XYZ-IBD on the GPU machine (100+ GB, D5); run CNOS + FoundPose adapters on the val split;
-      rsync caches (this is the long pole — start on day 1)
-- [ ] `binposert/data/`: XYZ-IBD loader quirks (multi-camera extrinsics, any format deviations) as config,
+- [x] Download XYZ-IBD on the GPU machine (10.7 GB without `train_pbr`, D5); CNOS + FoundPose adapters
+      on the val split (the test split has no public GT); rsync of the caches to the laptop still pending
+- [x] `binposert/data/`: XYZ-IBD loader quirks (multi-camera extrinsics, any format deviations) as config,
       not code, where possible
-- [ ] `binposert/multiview/association.py`: geometric gating + Hungarian assignment, one-to-one per View,
+- [x] `binposert/multiview/association.py`: geometric gating + Hungarian assignment, one-to-one per View,
       unassigned allowed (D10)
-- [ ] Synthetic test: 3 copies, 2 cameras, one occluded → exactly 3 ObjectTracks
+- [x] Synthetic test: 3 copies, 2 cameras, one occluded → exactly 3 ObjectTracks
 
 Week 8 — Fusion
-- [ ] `binposert/multiview/fusion.py`: symmetry-align to highest-weight reference (D9), weighted
+- [x] `binposert/multiview/fusion.py`: symmetry-align to highest-weight reference (D9), weighted
       Lie-algebra mean (D10 step 3), initial hand-set weights
-- [ ] Joint multi-view ICP polish reusing `refine/` unchanged against the union masked world-frame cloud,
+- [x] Joint multi-view ICP polish reusing `refine/` unchanged against the union masked world-frame cloud,
       gated exactly as D8
-- [ ] Multi-view QualitySignals: view count, hypothesis dispersion, joint-ICP fitness, multi-view residual
-- [ ] Synthetic tests: 3 noisy views → better than best single view; 137° about cylinder axis → error ≈ 0
+- [x] Multi-view QualitySignals: view count, hypothesis dispersion, joint-ICP fitness, multi-view residual
+- [x] Synthetic tests: 3 noisy views → better than best single view; 137° about cylinder axis → error ≈ 0
       after alignment; fusion of hypotheses in different symmetry branches does not corrupt the mean
 
 Week 9 — Experiments and closure
-- [ ] Multi-view debug on T-LESS (several image_ids of one scene, D5) before touching XYZ-IBD
-- [ ] `configs/experiments/A6.yaml A7.yaml`; rows: best single view / mean only / mean + joint ICP
-- [ ] AR vs number of views {1, 2, 3, 4} with error bars (bootstrap over scenes), stratified by visibility
-- [ ] Extrinsic perturbation sweep: δt ∈ {0, 1, 2, 5, 10} mm × δθ ∈ {0, 0.1, 0.25, 0.5, 1}° → multi-view AR
-- [ ] Association correctness on repeated objects (track purity / completeness vs GT)
-- [ ] Gallery: mis-associations, symmetry-branch flips
+- [x] Multi-view debug on T-LESS (several image_ids of one scene, D5) before touching XYZ-IBD
+- [x] `configs/experiments/A6.yaml A7.yaml`; rows: best single view / mean only / mean + joint ICP
+- [x] AR vs number of views {1, 2, 3, 4} with error bars (bootstrap over scenes), stratified by visibility
+- [x] Extrinsic perturbation sweep: δt ∈ {0, 1, 2, 5, 10} mm × δθ ∈ {0, 0.1, 0.25, 0.5, 1}° → multi-view AR
+- [x] Association correctness on repeated objects (track purity / completeness vs GT)
+- [x] Gallery: mis-associations, symmetry-branch flips
 
-### Exit criterion
-XYZ-IBD 1/2/3/4-view AR curve with error bars; association correctness on repeated objects.
+### Exit criterion (met 2026-09-17)
+XYZ-IBD 1/2/3/4-view AR curve with error bars (22.6 → 30.9 → 36.5 → 38.3, 95 % bootstrap over 15 val
+scenes; `docs/results_gamma_xyzibd.md`); association correctness on repeated objects (purity 89–93 %,
+completeness 86–89 % on 10–59 copies per bin). Verified by `tools/check_gamma.py --dataset xyzibd`
+(123 checks) and on T-LESS (`docs/results_gamma_tless.md`).
 
 ### Deliverables
-`binposert/multiview/` · XYZ-IBD caches on the GPU machine and laptop · AR-vs-views figure · perturbation
-heat-map · association metrics · gallery.
+`binposert/multiview/` · XYZ-IBD caches on the GPU machine (laptop rsync pending) · AR-vs-views figures
+(`docs/figures/gamma_*_curve.png`) · perturbation heat-maps (`gamma_*_sweep.png`) · association metrics ·
+galleries (`<fuse dir>/analysis/gallery/`) · decision log `docs/milestone_gamma_decision.md` (G1–G20).
 
 ### Risks specific to this milestone
 | Risk | Response |

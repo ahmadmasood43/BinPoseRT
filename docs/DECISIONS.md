@@ -147,6 +147,13 @@ Defined in [`CONTEXT.md`](../CONTEXT.md). Non-negotiable rules:
    world-frame point cloud, gated exactly as in D8. Reuses the Refinement module unchanged.
 - Ablation rows: best single view / mean only / mean + joint ICP.
 - CosyPose-style joint render-based optimisation is out of scope.
+- *Revised in Gamma (G17):* step 4 is **not** on the default path. On T-LESS the joint polish scores
+  below the mean at every view count (−0.8 to −1.4 AR) and worsens multi-member tracks (3-member:
+  median world MSSD 2.95 → 3.70 mm): the union of several Views' clouds carries each View's residual
+  calibration / registration error, the mean of per-view poses averages it out. A7 keeps the row as
+  the ablation; the default is `fusion=mean`. Weights: seg_score · icp_fitness · depth_coverage ·
+  visible_fraction, rejected members × 0.2 (G5). A FusedPose is scored by projection into every View of
+  its group (G6).
 
 ### D11 — ConfidenceModel: two calibrated logistic models, one success criterion
 - **Success criterion (project-wide):** `MSSD(T_pred, T_gt) < 0.1 · diameter` — BOP-standard and
@@ -351,7 +358,7 @@ onboarding tool · benchmark scripts (one command per ablation) · results CSV/J
 | 1 Foundations | **done 2026-09-12** | 30 tests, < 5 s, CPU only; `types`, `transforms`, `symmetry`, `render`, `data`, `evaluate` |
 | 2 Alpha | **done 2026-09-15** | T-LESS BOP19 official AR: A0 59.2 (GT masks + FoundPose), A1 35.4 (CNOS + FoundPose), A5 48.2 (CNOS + MegaPose); core evaluator within 0.3 pt of bop_toolkit; 44 tests, < 15 s; GPU stages ran from host venvs (Docker images written, unbuilt: no container toolkit on the machine) |
 | 3 Beta | **done 2026-09-16** | T-LESS BOP19 official AR 35.4 → 47.8 (A2, depth init + point-to-plane ICP); robust 47.9, GICP 47.3. Depth initialisation of the translation added (D8); silhouette gate demoted to a signal after a val-scene sweep; renderer made single-threaded (Open3D parallel raycast corrupts under load). 71 tests, < 60 s; CPU only, from Alpha's caches |
-| 4 Gamma | not started | |
+| 4 Gamma | **done 2026-09-17** | Multi-view association + fusion (D10) on T-LESS and XYZ-IBD val. T-LESS BOP19 AR core/official, 1 → 4 fused views (mean): 50.9/51.1 → 63.9/64.2 → 69.2/69.5 → 72.3/72.5; XYZ-IBD (core, 255 val images, 15 objects × 10–59 copies): 22.6 → 30.9 → 36.5 → 38.3 (best) / 37.3 (mean). Association vs GT instances: T-LESS purity 100 %, completeness 95 %; XYZ-IBD purity 89–93 %, completeness 86–89 % (stacked copies < 0.5 d apart). Joint ICP polish below or equal to the mean at every k on both datasets — D10 step 4 dropped from the default. Extrinsic sweep: 2 mm / 0.25° costs < 2 pt (T-LESS) / 0.5 pt (XYZ-IBD). Depth↔RGB offset estimated GT-free (T-LESS −3.3 px → +3.3 AR single view; XYZ-IBD 0). `multiview/`, `associate`/`fuse` stages, A6/A7, per-camera dataset views, `check_gamma.py`; 97 tests, < 60 s |
 | 5 Delta | not started | |
 | 6 Stretch | not started | |
 
@@ -384,3 +391,27 @@ onboarding tool · benchmark scripts (one command per ablation) · results CSV/J
   poses by a constant ~2.5 mm along camera y for both estimators, with perfect fitness/RMSE: a depth↔RGB offset
   of the sensor data, to be estimated GT-free in Gamma, not tuned against test GT. Full tables:
   `docs/results_beta_tless.md`; the step-by-step decision log of the milestone: `docs/milestone_beta_decision.md`.
+- 2026-09-16 — Gamma on T-LESS. (1) *Depth↔RGB offset* (B20 closed): estimated GT-free from depth-edge /
+  RGB-edge alignment on val scenes (dv = −3.3 px ≈ −2.4 mm), applied as `dataset.depth_shift_px`; ICP's
+  y-bias 2.39 → 0.56 mm on val, single-view A2 core AR 47.55 → 50.86 (official 51.1) on all 20 scenes.
+  (2) *Multi-view* (RQ-C): strided view groups over a scene's target images; per-view Hungarian association
+  with a 0.5 d / 45° symmetry-aware gate (purity 100 %, completeness 95 % vs GT instances); symmetry-aligned
+  weighted SE(3) mean; a FusedPose is scored in every View of its group. AR 50.9 → 63.9 → 69.2 → 72.3 for
+  1–4 views; occluded objects gain most (visibility 10–30 %: 1.1 → 40.0). (3) *Joint ICP* (D10 step 4)
+  worsens multi-member tracks and is dropped from the default path (D10 revised, A7 = ablation).
+  (4) *Extrinsic sweep* (4 views): 2 mm / 0.25° costs < 2 pt, 10 mm / 1° costs 12 pt and still beats single
+  view by 9. (5) Infrastructure: Open3D `cast_rays` validated and retried (corruption recurred under load);
+  XYZ-IBD read through a per-camera symlink view (`tools/bop_camera_view.py`; camera `xyz` is grayscale;
+  the test split has no public GT, so Gamma/Delta use `val`); CNOS's template renderer patched
+  (mm centroid applied in metres) and its object ids mapped through the template list (XYZ-IBD ids have
+  gaps). Tables: `docs/results_gamma_tless.md`; decision log: `docs/milestone_gamma_decision.md`.
+- 2026-09-17 — Gamma closed with XYZ-IBD val (the test split has no public GT). CNOS + FoundPose onboarded
+  on the 15 objects through the `xyz` camera view; four fixes to run them at 1440 × 1080 with non-contiguous
+  object ids (CNOS template centroid in metres, category id → template list, chunked proposal batches;
+  FoundPose dataset table, per-object view radius / re-render for a 296 mm bar). Results: single view 22.6
+  (CNOS finds < 50 % of the copies), 4 views 38.3 (best) / 37.3 (mean); `best` ≥ `mean` here (members agree
+  to 0.4–0.8 mm, the failure mode is a wrong member, not a noisy one) while `mean` wins on T-LESS — `mean`
+  stays the default. Repeated-object association: 89–93 % pure, 86–89 % complete; the mixed tracks are
+  stacked copies closer than the 0.5 d gate. Evaluate renders each pose once for VSD (n + m renders per
+  image instead of 2 nm); scene pools resubmit the jobs of a worker that died (the raycast corruption also
+  segfaults, which hung `multiprocessing.Pool`). Tables: `docs/results_gamma_xyzibd.md`.

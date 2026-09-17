@@ -1,0 +1,6 @@
+# No fusion: every View keeps its own hypothesis, scored on the view-group images only. This is the
+# single-view reference on exactly the images the fused rows are scored on.
+name: none
+version: 1
+params:
+  method: none

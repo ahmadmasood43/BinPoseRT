@@ -26,3 +26,5 @@ command:
   - "{out_dir}"
   - --params
   - "{params_json}"
+env:
+  PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True   # 1440 x 1080 frames fragment the 12 GB card

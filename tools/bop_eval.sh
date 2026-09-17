@@ -26,13 +26,24 @@ if [ ! -x "$env_dir/.venv/bin/python" ]; then
     || uv pip install -q --python "$env_dir/.venv/bin/python" -e "$src_dir"
 fi
 
-name="$(basename "$csv" .csv)"
-dataset_split="${name#*_}"          # tless-test
+orig_name="$(basename "$csv" .csv)"
+dataset_split="${orig_name##*_}"    # tless-test (after the last underscore)
 dataset="${dataset_split%-*}"       # tless
+# bop_toolkit splits the file name on underscores, so a method name may not contain any
+# (experiment names such as A6_k2_mean do): underscores become hyphens for the evaluation.
+method="${orig_name%_*}"
+name="${method//_/-}_${dataset_split}"
 mkdir -p "$eval_dir"
 cp -f "$csv" "$eval_dir/$name.csv"
 
 export BOP_PATH="$root/data/bop"
+# BOP_TARGETS=<path> scores a subset of the targets (multi-view rows: the view-group images only);
+# bop_toolkit resolves the name relative to the dataset directory, so the file is copied there.
+targets_name="test_targets_bop19.json"
+if [ -n "${BOP_TARGETS:-}" ]; then
+  targets_name="targets_$(sha256sum "$BOP_TARGETS" | cut -c1-12).json"
+  cp -f "$BOP_TARGETS" "$BOP_PATH/$dataset/$targets_name"
+fi
 export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-egl}"
 export PATH="$env_dir/.venv/bin:$PATH"   # eval_bop19_pose.py shells out to a bare `python`
 cd "$src_dir"
@@ -41,7 +52,10 @@ python scripts/eval_bop19_pose.py \
   --results_path "$eval_dir" \
   --eval_path "$eval_dir" \
   --result_filenames "$name.csv" \
-  --targets_filename test_targets_bop19.json \
+  --targets_filename "$targets_name" \
   --num_workers "${BOP_EVAL_WORKERS:-1}"   # >1 races on a shared tmp dir in renderer_batch.py
+if [ "$name" != "$orig_name" ] && [ ! -e "$eval_dir/$orig_name" ]; then
+  ln -s "$name" "$eval_dir/$orig_name"   # found under the CSV's own name too
+fi
 echo "official scores: $eval_dir/$name/scores_bop19.json"
 cat "$eval_dir/$name/scores_bop19.json"

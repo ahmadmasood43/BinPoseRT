@@ -23,6 +23,7 @@ import numpy as np
 import numpy.typing as npt
 import trimesh
 
+from binposert.data.depth_offset import shift_depth
 from binposert.symmetry import from_bop_model_info
 from binposert.transforms import invert, make_T
 from binposert.types import GroundTruthPose, ObjectModel, Scene, View
@@ -65,10 +66,17 @@ class BopDataset:
         models_dir: str | None = None,
         continuous_symmetry_steps: int = 36,
         targets: str | Path | None = None,
+        depth_shift_px: tuple[float, float] | None = None,
+        name: str | None = None,
     ) -> None:
         """``targets`` names a BOP ``test_targets_*.json`` (relative to ``root`` or absolute); when
-        given, enumeration and evaluation are restricted to the listed images and objects."""
+        given, enumeration and evaluation are restricted to the listed images and objects.
+        ``depth_shift_px = (du, dv)`` translates every depth map onto the RGB image (the sensor's
+        depth↔RGB registration offset, estimated GT-free with ``tools/depth_rgb_offset.py``).
+        ``name`` labels outputs and run directories (default: the root directory's name; a camera
+        view such as ``xyzibd_xyz`` is still the dataset ``xyzibd``)."""
         self.root = Path(root)
+        self._name = name
         self.split = split
         self.split_dir = self.root / split
         if not self.split_dir.is_dir():
@@ -79,6 +87,9 @@ class BopDataset:
         self._continuous_steps = continuous_symmetry_steps
         self._models: dict[int, ObjectModel] = {}
         self._scene_json: dict[tuple[int, str], dict[str, Any]] = {}
+        self.depth_shift_px = (
+            (float(depth_shift_px[0]), float(depth_shift_px[1])) if depth_shift_px else None
+        )
         self.targets: dict[tuple[int, int], dict[int, int]] | None = None
         self.targets_file: Path | None = None
         if targets is not None:
@@ -90,7 +101,7 @@ class BopDataset:
 
     @property
     def name(self) -> str:
-        return self.root.name
+        return self._name or self.root.name
 
     @property
     def scene_ids(self) -> list[int]:
@@ -152,8 +163,10 @@ class BopDataset:
     ) -> tuple[View, list[GroundTruthPose]]:
         cam = self.camera(scene_id, image_id)
         K = np.asarray(cam["cam_K"], dtype=np.float64).reshape(3, 3)
-        if "cam_R_w2c" in cam:
-            T_camera_world = make_T(cam["cam_R_w2c"], cam["cam_t_w2c"])
+        # BOP-25 multi-camera datasets (XYZ-IBD) spell the extrinsics ``R_w2c`` / ``t_w2c``
+        R_key = "cam_R_w2c" if "cam_R_w2c" in cam else "R_w2c"
+        if R_key in cam:
+            T_camera_world = make_T(cam[R_key], cam[R_key.replace("R_", "t_")])
             T_world_camera = invert(T_camera_world)
         else:
             T_world_camera = np.eye(4)
@@ -214,7 +227,10 @@ class BopDataset:
         if raw is None:
             raise OSError(f"cannot read {p}")
         scale = float(self.camera(scene_id, image_id).get("depth_scale", 1.0))
-        return raw.astype(np.float64) * scale
+        depth = raw.astype(np.float64) * scale
+        if self.depth_shift_px is not None:
+            depth = shift_depth(depth, *self.depth_shift_px)
+        return depth
 
     def gt_mask(
         self, scene_id: int, image_id: int, gt_index: int, visible_only: bool = True

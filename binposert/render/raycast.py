@@ -7,7 +7,10 @@ Rays are cast single-threaded (``nthreads=1``). Open3D 0.19's parallel ``cast_ra
 output under multi-process load: with 15 worker processes on 16 cores, 126 of 1751 renders of
 720×540 raised inside numpy on garbage indices and 5 more silently differed from a re-render;
 ``nthreads=1`` gave 0 of both (13 ms vs 5 ms per render). Stages parallelise over scenes with one
-process per scene instead (``binposert.pipeline.pool``).
+process per scene instead (``binposert.pipeline.pool``). Gamma saw one more corrupted cast under a
+load average of ~20 (a stage plus the test suite): every cast is therefore validated (shapes,
+primitive ids below the face count, finite positive hit distances) and re-cast up to
+``CAST_RETRIES`` times before failing loudly.
 """
 
 from __future__ import annotations
@@ -23,6 +26,54 @@ from binposert.types import Mat3, ObjectModel
 
 NO_HIT = o3d.t.geometry.RaycastingScene.INVALID_ID
 RAY_THREADS = 1  # see the module docstring
+CAST_RETRIES = 3
+
+
+class RenderCorrupted(RuntimeError):
+    """``cast_rays`` returned inconsistent output ``CAST_RETRIES`` times in a row."""
+
+
+def _cast_checked(
+    scene: o3d.t.geometry.RaycastingScene,
+    rays: o3d.core.Tensor,
+    shape: tuple[int, int],
+    n_primitives: int,
+    n_geometries: int,
+) -> tuple[
+    npt.NDArray[np.float64], npt.NDArray[np.int64], npt.NDArray[np.int64], npt.NDArray[np.float64]
+]:
+    """Cast and validate; returns ``(t_hit, primitive_ids, geometry_ids, primitive_normals)``."""
+    last = ""
+    for _ in range(CAST_RETRIES):
+        try:
+            ans = scene.cast_rays(rays, nthreads=RAY_THREADS)
+            t_hit = np.asarray(ans["t_hit"].numpy(), dtype=np.float64)
+            prim = np.asarray(ans["primitive_ids"].numpy(), dtype=np.int64)
+            geom = np.asarray(ans["geometry_ids"].numpy(), dtype=np.int64)
+            normals = np.asarray(ans["primitive_normals"].numpy(), dtype=np.float64)
+        except Exception as e:  # noqa: BLE001 — garbage output raises inside numpy
+            last = f"{type(e).__name__}: {e}"
+            continue
+        if t_hit.shape != shape or prim.shape != shape or geom.shape != shape:
+            last = f"shapes {t_hit.shape} {prim.shape} {geom.shape} != {shape}"
+            continue
+        if normals.shape != (*shape, 3):
+            last = f"normals shape {normals.shape}"
+            continue
+        hit = prim != NO_HIT
+        if hit.any():
+            p_hit, g_hit, d_hit = prim[hit], geom[hit], t_hit[hit]
+            if p_hit.min() < 0 or p_hit.max() >= n_primitives:
+                last = f"primitive id out of range [{p_hit.min()}, {p_hit.max()}] / {n_primitives}"
+                continue
+            if g_hit.min() < 0 or g_hit.max() >= n_geometries:
+                last = f"geometry id out of range [{g_hit.min()}, {g_hit.max()}] / {n_geometries}"
+                continue
+            if not (np.isfinite(d_hit).all() and (d_hit > 0).all()):
+                last = "non-finite or non-positive hit distance"
+                continue
+        return t_hit, prim, geom, normals
+    raise RenderCorrupted(f"cast_rays output invalid {CAST_RETRIES} times: {last}")
 
 
 @dataclass(frozen=True)
@@ -56,11 +107,23 @@ class MeshRenderer:
         return cls(model.vertices, model.faces)
 
     def render(self, T_camera_object: Mat4, K: Mat3, image_size: tuple[int, int]) -> RenderResult:
+        # The whole render is retried, not only the cast: under load the corruption has also hit
+        # numpy's own index buffers *after* the cast validated (an IndexError with a high bit set
+        # in the index, e.g. 2097319 for a 1080-row image), so the post-processing is guarded too.
+        last: Exception | None = None
+        for _ in range(CAST_RETRIES):
+            try:
+                return self._render_once(T_camera_object, K, image_size)
+            except (IndexError, ValueError) as e:
+                last = e
+        raise RenderCorrupted(f"render failed {CAST_RETRIES} times: {last}")
+
+    def _render_once(
+        self, T_camera_object: Mat4, K: Mat3, image_size: tuple[int, int]
+    ) -> RenderResult:
         h, w = image_size
         rays = _pinhole_rays(K, T_camera_object, w, h)
-        ans = self._scene.cast_rays(rays, nthreads=RAY_THREADS)
-        t_hit = ans["t_hit"].numpy().astype(np.float64)
-        prim = ans["primitive_ids"].numpy().astype(np.int64)
+        t_hit, prim, _, normals_obj = _cast_checked(self._scene, rays, (h, w), self.n_faces, 1)
         hit = prim != NO_HIT
         # Rays live in the object frame (the frame the triangles were added in). t_hit is the ray
         # parameter; depth along the camera optical axis is t * (R_camera_object @ dir)_z.
@@ -68,7 +131,6 @@ class MeshRenderer:
         dirs_obj = rays.numpy()[..., 3:6].astype(np.float64)
         dirs_cam = dirs_obj @ R.T
         depth = np.where(hit, t_hit * dirs_cam[..., 2], 0.0)
-        normals_obj = ans["primitive_normals"].numpy().astype(np.float64)
         normals_cam = normals_obj @ R.T
         # orient normals toward the camera
         flip = np.sum(normals_cam * dirs_cam, axis=-1) > 0
@@ -98,10 +160,9 @@ def render_scene(
             o3d.core.Tensor(np.ascontiguousarray(model.faces.astype(np.uint32))),
         )
     rays = _pinhole_rays(K, np.eye(4), w, h)
-    ans = scene.cast_rays(rays, nthreads=RAY_THREADS)
-    geom = ans["geometry_ids"].numpy().astype(np.int64)
+    n_faces = max(int(len(m.faces)) for m, _ in placed)  # primitive ids are per geometry
+    t_hit, _, geom, _ = _cast_checked(scene, rays, (h, w), n_faces, len(placed))
     hit = geom != NO_HIT
-    t_hit = ans["t_hit"].numpy().astype(np.float64)
     depth = np.where(hit, t_hit * rays.numpy()[..., 5].astype(np.float64), 0.0)
     geom[~hit] = -1
     return SceneRenderResult(depth=depth, geometry_ids=geom)

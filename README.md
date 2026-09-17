@@ -6,10 +6,10 @@ Given one or more calibrated RGB-D views of a cluttered bin and CAD models of th
 returns, for every visible physical object, a world-frame pose `T_world_object`, a **calibrated
 confidence** that the pose is correct, and a **verdict** (`accept` / `reject` / `request_view`).
 
-> Status: **Beta complete** (increment 3 of 6, 2026-09-16): depth-based refinement — translation
-> initialised from depth, ICP behind one signature (point-to-plane / robust / GICP), an acceptance gate
-> that is measured rather than assumed — lifts the T-LESS baseline from 35.4 to 47.8 AR. Next: Gamma
-> (multi-view association and fusion). See [docs/MILESTONES.md](docs/MILESTONES.md).
+> Status: **Gamma complete** (increment 4 of 6, 2026-09-17): multi-view association and fusion.
+> A GT-free depth↔RGB calibration takes the T-LESS single-view chain from 47.8 to 51.1 AR and fusing
+> four calibrated views takes it to 72.5; on XYZ-IBD's 10–59-copy bins four views take 22.6 to 38.3.
+> Next: Delta (calibrated confidence and verdicts). See [docs/MILESTONES.md](docs/MILESTONES.md).
 > Numbers in this README only ever come from `outputs/` run manifests.
 
 ## What it does
@@ -50,16 +50,30 @@ stage *costs* 1.3 points (A5r): ICP moves already-good poses by a constant ~2.5 
 depth↔RGB offset of the sensor data, to be calibrated without GT in Gamma. CNOS still costs the most:
 15 % of targets get no prediction and AR stays ~1 % below 30 % visibility.
 
-| Dataset | AR (VSD/MSSD/MSPD) | Δ from refinement | Δ from 3-view fusion | Update-path p95 |
-|---|---|---|---|---|
-| T-LESS | 47.8 (41.4 / 50.6 / 51.4) | +12.4 (from 35.4) | n/a | TBD (refine 0.79 s / hyp on CPU) |
-| XYZ-IBD | TBD | TBD | TBD | TBD |
+| Dataset | AR (VSD/MSSD/MSPD), single view | Δ from refinement | Δ from depth↔RGB calibration | Δ from fusion (2 / 3 / 4 views) | Update-path p95 |
+|---|---|---|---|---|---|
+| T-LESS | 51.1 (48.0 / 51.4 / 53.2) | +12.4 (35.4 → 47.8) | +3.3 (47.8 → 51.1, GT-free estimate) | +13.1 / +18.4 / **+21.4** (→ 64.2 / 69.5 / 72.5) | TBD (refine 0.79 s / hyp; associate + fuse ms) |
+| XYZ-IBD (val, core) | 22.6 (20.4 / 23.4 / 23.9) | in the chain | none needed (0 px) | +8.3 / +13.9 / **+15.7** (→ 30.9 / 36.5 / 38.3, best) | TBD |
+
+Gamma (multi-view, [`docs/results_gamma_tless.md`](docs/results_gamma_tless.md)): the depth map of the
+T-LESS sensor sits 3.3 px below the RGB image, measured from edge alignment on val scenes with no pose
+annotation, and correcting it is worth +3.3 AR by itself. Fusing calibrated views — one-to-one
+association per View with a symmetry-aware gate (purity 100 % vs GT), symmetry alignment, weighted SE(3)
+mean, the fused pose predicted in every View — lifts AR from 51 to 72.5 with four views; occluded objects
+gain most (visibility 10–30 %: 1 → 40). A joint multi-view ICP polish *lowers* the mean at every view
+count (the union cloud inherits each view's residual calibration error) and is kept only as an ablation.
+Calibration errors of 2 mm / 0.25° cost under 2 points. On XYZ-IBD
+([`docs/results_gamma_xyzibd.md`](docs/results_gamma_xyzibd.md)) the detector finds fewer than half of the
+10–59 identical copies per bin, so the single-view row is 22.6; four views lift it to 38.3, association
+stays 89–93 % pure on stacked copies, and picking the best-weighted view edges out averaging there
+because members already agree to under a millimetre.
 
 ## Project documents
 
 - [`docs/DECISIONS.md`](docs/DECISIONS.md) — the single decision record: scope, architecture, milestones, ablations, risks
 - [`docs/MILESTONES.md`](docs/MILESTONES.md) — the dated milestone plan: weekly tasks, exit criteria, slip policy
 - [`docs/milestone_beta_decision.md`](docs/milestone_beta_decision.md) — the Beta decision log: what was decided, on what evidence, and what was not chosen
+- [`docs/milestone_gamma_decision.md`](docs/milestone_gamma_decision.md) — the Gamma decision log (G1–G17)
 - [`CONTEXT.md`](CONTEXT.md) — the project vocabulary (Detection → PoseHypothesis → ObjectTrack → FusedPose)
 - [`docs/adr/`](docs/adr/) — the four hard-to-reverse decisions
 - [`docs/source/`](docs/source/) — the original research plan this project was derived from

@@ -1,0 +1,27 @@
+# D10 steps 2-4: the weighted mean, then one joint ICP of the visibility-cropped model against the
+# union of every View's masked world-frame cloud, gated as in D8 (silhouette as a signal only, as
+# tuned in Beta).
+name: mean_joint_icp
+version: 1
+n_workers: 0                      # 0 = all cores but one; scenes in parallel processes
+params:
+  method: mean
+  mean_iterations: 5
+  joint_icp:
+    variant: point_to_plane
+    corr_dist_factors: [0.15, 0.08, 0.04]
+    max_iterations: 30
+    robust_k_factor: 0.05
+    max_model_points_per_view: 2000
+    max_scene_points_per_view: 2000
+    erode_px: 2
+    mask_dilate_px: 3
+    z_window_factor: 1.5
+    min_scene_points: 50
+    gate:
+      alpha: 0.6
+      beta_deg: 90.0
+      min_iou: 0.0
+      max_iou_drop: 1.0
+      min_fitness: 0.3
+  project_to: all                 # all | members: which Views of the group receive the fused pose

@@ -1,0 +1,7 @@
+# "Best single view": the highest-weight member of each ObjectTrack, projected into every View of
+# the group. Isolates what selecting a view buys before any averaging.
+name: best
+version: 1
+params:
+  method: best
+  project_to: all                 # all | members: which Views of the group receive the fused pose

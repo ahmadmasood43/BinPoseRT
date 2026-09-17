@@ -27,6 +27,8 @@ def make_dataset(cfg: dict[str, Any], repo_root: Path) -> BopDataset:
         models_dir=d.get("models_dir"),
         targets=d.get("targets"),
         continuous_symmetry_steps=int(d.get("continuous_symmetry_steps", 36)),
+        depth_shift_px=tuple(d["depth_shift_px"]) if d.get("depth_shift_px") else None,
+        name=d.get("name"),
     )
 
 

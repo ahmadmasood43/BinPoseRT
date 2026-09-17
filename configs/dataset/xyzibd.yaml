@@ -1,0 +1,14 @@
+# XYZ-IBD (BOP 2025, multi-camera), read through the per-camera symlink view built by
+#   uv run python tools/bop_camera_view.py xyzibd xyz --targets-from-multiview test_targets_multiview_bop25.json
+# Camera `xyz` is the one the BOP-25 multi-view targets use (five calibrated views per scene); it is
+# grayscale (1440 x 1080), exposed as `rgb` with three identical channels. `realsense` (RGB, 1280 x 720)
+# is the fallback camera: the same command with `realsense` and root data/bop/xyzibd_realsense.
+name: xyzibd
+root: data/bop/xyzibd_xyz
+split: val                    # the test split has no public GT (BOP server); Gamma/Delta use val
+bop_split: val
+bop_name: xyzibd              # dataset name in BOP CSV file names (no underscores: bop_toolkit splits on them)
+models_dir: models_eval
+targets: val_targets_gamma.json   # every 3rd of the 50 calibrated views per val scene (17 images x 15 scenes)
+continuous_symmetry_steps: 36
+depth_shift_px: null          # measured 0 +- 0.5 px on 20 val images (tools/depth_rgb_offset.py): gray and depth share one optical path

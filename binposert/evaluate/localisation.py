@@ -19,7 +19,7 @@ import numpy.typing as npt
 
 from binposert.data import BopDataset
 from binposert.evaluate.bop_csv import PosePrediction
-from binposert.evaluate.metrics import mspd, mssd, vsd
+from binposert.evaluate.metrics import _ray_length_factor, mspd, mssd, vsd_from_distances
 from binposert.render import MeshRenderer
 from binposert.types import GroundTruthPose
 
@@ -64,8 +64,10 @@ def _evaluate_scene(
     dataset: BopDataset,
     n_model_points: int,
     with_vsd: bool,
+    images: set[tuple[int, int]] | None = None,
 ) -> _SceneResult:
-    """All images of one scene; renderers and model points are built per worker process."""
+    """All images of one scene (or those in ``images``); renderers and model points are built per
+    worker process."""
     renderers: dict[int, MeshRenderer] = {}
     pts_cache: dict[int, npt.NDArray[np.float64]] = {}
     tp_mssd: dict[int, npt.NDArray[np.float64]] = defaultdict(lambda: np.zeros(len(MSSD_THRESH)))
@@ -78,6 +80,8 @@ def _evaluate_scene(
     vsd_available = False
 
     for image_id in dataset.image_ids(scene_id):
+        if images is not None and (scene_id, image_id) not in images:
+            continue
         view, gts = dataset.load_view(scene_id, image_id, load_rgb=False, load_depth=with_vsd)
         object_ids = dataset.target_object_ids(scene_id, image_id)
         if object_ids is None:
@@ -108,6 +112,23 @@ def _evaluate_scene(
             e_mssd = np.full((len(cand), len(valid)), np.inf)
             e_mspd = np.full((len(cand), len(valid)), np.inf)
             e_vsd = np.full((len(cand), len(valid), len(taus)), np.inf)
+            dist_est: list[npt.NDArray[np.float64]] = []
+            dist_gt: list[npt.NDArray[np.float64]] = []
+            dist_test: npt.NDArray[np.float64] | None = None
+            if use_vsd:
+                # render every pose once; VSD of a pair works on the two distance images
+                assert view.depth is not None
+                ray = _ray_length_factor(view.K, view.image_size)
+                dist_test = view.depth * ray
+                rend = renderers[object_id]
+                dist_est = [
+                    rend.render(p.T_camera_object, view.K, view.image_size).depth * ray
+                    for p in cand
+                ]
+                dist_gt = [
+                    rend.render(g.T_camera_object, view.K, view.image_size).depth * ray
+                    for g in valid
+                ]
             for i, p in enumerate(cand):
                 for j, g in enumerate(valid):
                     e_mssd[i, j] = mssd(p.T_camera_object, g.T_camera_object, pts, model.symmetry)
@@ -115,14 +136,9 @@ def _evaluate_scene(
                         p.T_camera_object, g.T_camera_object, pts, model.symmetry, view.K
                     )
                     if use_vsd:
-                        assert view.depth is not None
-                        e_vsd[i, j] = vsd(
-                            p.T_camera_object,
-                            g.T_camera_object,
-                            renderers[object_id],
-                            view.depth,
-                            view.K,
-                            tau_mm=taus,
+                        assert dist_test is not None
+                        e_vsd[i, j] = vsd_from_distances(
+                            dist_est[i], dist_gt[j], dist_test, tau_mm=taus
                         )
 
             tp_mssd[object_id] += _true_positives(e_mssd, thr_mssd)
@@ -157,19 +173,23 @@ def evaluate_localisation(
     n_model_points: int = 2000,
     with_vsd: bool = True,
     n_workers: int = 1,
+    images: set[tuple[int, int]] | None = None,
 ) -> LocalisationReport:
-    """``n_workers > 1`` evaluates scenes in parallel (spawned) processes; results are identical."""
+    """``n_workers > 1`` evaluates scenes in parallel (spawned) processes; results are identical.
+    ``images`` restricts the ground truth to the listed ``(scene_id, image_id)`` pairs."""
     by_key: dict[tuple[int, int, int], list[PosePrediction]] = defaultdict(list)
     for p in preds:
         by_key[(p.scene_id, p.image_id, p.object_id)].append(p)
 
     scene_ids = dataset.scene_ids
-    jobs = [(sid, by_key, dataset, n_model_points, with_vsd) for sid in scene_ids]
+    if images is not None:
+        wanted = {s for s, _ in images}
+        scene_ids = [s for s in scene_ids if s in wanted]
+    jobs = [(sid, by_key, dataset, n_model_points, with_vsd, images) for sid in scene_ids]
     if n_workers > 1 and len(scene_ids) > 1:
-        from binposert.pipeline.pool import scene_pool
+        from binposert.pipeline.pool import map_scenes
 
-        with scene_pool(min(n_workers, len(scene_ids))) as pool:
-            results = pool.starmap(_evaluate_scene, jobs)
+        results = map_scenes(_evaluate_scene, jobs, n_workers)
     else:
         results = [_evaluate_scene(*job) for job in jobs]
 

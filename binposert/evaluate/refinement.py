@@ -143,10 +143,9 @@ def score_refinement(
     scene_ids = sorted(int(s) for s in details["scene_id"].unique())
     jobs = [(sid, details[details.scene_id == sid], dataset, n_model_points) for sid in scene_ids]
     if n_workers > 1 and len(jobs) > 1:
-        from binposert.pipeline.pool import scene_pool
+        from binposert.pipeline.pool import map_scenes
 
-        with scene_pool(min(n_workers, len(jobs))) as pool:
-            results = pool.starmap(_score_scene, jobs)
+        results = map_scenes(_score_scene, jobs, n_workers)
     else:
         results = [_score_scene(*job) for job in jobs]
     keys = ["scene_id", "image_id", "object_id", "detection_id", "hypothesis_id"]

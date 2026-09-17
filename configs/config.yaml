@@ -5,6 +5,8 @@ defaults:
   - segmenter: gt
   - estimator: foundpose
   - refiner: pt2plane
+  - multiview: strided
+  - fusion: mean
   - experiment: null
 
 experiment:

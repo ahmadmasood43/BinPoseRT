@@ -1,0 +1,9 @@
+# As strided, but the candidate images of a scene are the BOP-25 multi-view targets (XYZ-IBD:
+# five views of one camera per scene, in the benchmark's order).
+defaults:
+  - strided
+name: bop25
+params:
+  groups:
+    source: targets_multiview
+    targets_multiview: test_targets_multiview_bop25.json
