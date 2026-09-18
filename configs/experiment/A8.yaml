@@ -1,0 +1,19 @@
+# @package _global_
+# A8 — can a small calibrated model predict pose failure? (RQ-D): the A6 chain (CNOS -> FoundPose ->
+# pt2plane refinement -> association -> weighted SE(3) mean) followed by the confidence stage; the
+# BOP score of every prediction is its Confidence. Rows: A8_k<k> per view count; A8w_k<k> with
+# Model H as the fusion weight (+multiview.params.weights.source=model_h).
+defaults:
+  - override /segmenter: cnos
+  - override /estimator: foundpose
+  - override /refiner: pt2plane
+  - override /multiview: strided
+  - override /fusion: mean
+  - override /confidence: logistic
+
+experiment:
+  name: A8
+  question: "can a small calibrated model predict pose failure? (RQ-D)"
+stages: [segment, coarse_pose, refine, associate, fuse, confidence, evaluate]
+evaluate:
+  score_signal: confidence

@@ -10,7 +10,10 @@ children inherit the environment at start-up) and restored afterwards.
 ``multiprocessing.Pool``: a worker that dies from a signal (Open3D's raycast corruption can
 segfault, Gamma G15) makes ``Pool.starmap`` wait forever for the lost task, whereas the executor
 raises ``BrokenProcessPool``, after which the scenes that did not finish are resubmitted to a fresh
-pool (up to ``retries`` times) and only then does the stage fail.
+pool (up to ``retries`` times) and only then does the stage fail. A job that raises
+``RenderCorrupted`` (the renderer validated and retried its cast three times and still saw a
+flipped bit in an index — G21's hardware suspicion) is treated the same way: its worker's memory,
+not the job, is what failed, so it is re-run in a fresh process.
 """
 
 from __future__ import annotations
@@ -26,6 +29,9 @@ from multiprocessing.pool import Pool
 from typing import Any
 
 THREAD_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS")
+# exceptions (by name, so this module imports nothing heavy) that mean the *process* is
+# corrupted rather than the job wrong: the job is resubmitted to a fresh pool
+RETRY_EXCEPTIONS = ("RenderCorrupted",)
 log = logging.getLogger("binposert.pipeline")
 
 
@@ -84,6 +90,7 @@ def map_scenes(
             except BaseException:
                 executor.shutdown(wait=False, cancel_futures=True)
                 raise
+        corrupted = 0
         try:
             for fut in as_completed(futures):
                 i = futures[fut]
@@ -92,12 +99,23 @@ def map_scenes(
                 except BrokenProcessPool:
                     broken = True
                     continue
+                except Exception as e:  # noqa: BLE001 — only the named corruption is retried
+                    if type(e).__name__ not in RETRY_EXCEPTIONS:
+                        raise
+                    # the worker survived but its memory did not (Gamma G15 / G21): the job is
+                    # re-run in a fresh process instead of failing the stage
+                    corrupted += 1
+                    broken = True
+                    continue
                 pending.remove(i)
         finally:
             executor.shutdown(wait=not broken, cancel_futures=True)
         if broken and pending:
             log.warning(
-                "a worker process died; resubmitting %d unfinished job(s) (attempt %d/%d)",
+                "%s; resubmitting %d unfinished job(s) in a fresh pool (attempt %d/%d)",
+                f"{corrupted} job(s) hit corrupted render output"
+                if corrupted
+                else "a worker process died",
                 len(pending),
                 attempt + 2,
                 retries,

@@ -99,12 +99,22 @@ class FuseStageParams:
     project_to: str = "all"  # "all": every View of the group | "members": the track's Views only
 
 
-def associate_params_from_config(section: dict[str, Any]) -> AssociateStageParams:
+def associate_params_from_config(
+    section: dict[str, Any], repo_root: Path | None = None
+) -> AssociateStageParams:
     p = dict(section.get("params", {}))
+    w = dict(p.get("weights", {}))
+    if w.get("source", "product") == "model_h":
+        path = Path(str(w.get("model_h", "")))
+        if not path.is_absolute() and repo_root is not None:
+            path = repo_root / path
+        if not path.is_file():
+            raise FileNotFoundError(f"weights.source=model_h needs a fitted model file: {path}")
+        w["model_h"] = str(path)
     return AssociateStageParams(
         groups=GroupParams(**p.get("groups", {})),
         association=AssociationParams(**p.get("association", {})),
-        weights=WeightParams(**p.get("weights", {})),
+        weights=WeightParams(**w),
         extrinsic_noise=ExtrinsicNoise(**p.get("extrinsic_noise", {})),
     )
 
@@ -198,6 +208,24 @@ def perturbed_extrinsics(
 # ----------------------------------------------------------------------------- associate
 
 
+def scene_weights(hyps: pd.DataFrame, dataset: BopDataset, p: WeightParams) -> pd.Series:
+    """Fusion weight of every hypothesis row: the D10 product, or Model H's probability (floored)
+    when the config says so — one batched model call per scene, not one per hypothesis."""
+    if p.source == "model_h":
+        from binposert.confidence import ConfidenceModel
+        from binposert.pipeline.confidence_stage import score_members
+
+        prob = score_members(hyps, dataset, ConfidenceModel.load(p.model_h))
+        return pd.Series(np.maximum(prob.to_numpy(dtype=float), p.floor), index=hyps.index)
+    if p.source != "product":
+        raise ValueError(f"unknown weight source {p.source!r}; choose product or model_h")
+    out = []
+    for _, row in hyps.iterrows():
+        h = hypothesis_from_row(row)
+        out.append(hypothesis_weight(h.signals, h.rejection_reason is not None, p))
+    return pd.Series(out, index=hyps.index, dtype=float)
+
+
 def associate_scene(
     scene_id: int,
     dataset: BopDataset,
@@ -208,6 +236,7 @@ def associate_scene(
     hyps = read_hypotheses_table(pose_dir)
     hyps = hyps[hyps.scene_id == scene_id]
     models = {oid: dataset.load_model(oid) for oid in sorted(hyps.object_id.unique())}
+    weights = scene_weights(hyps, dataset, params.weights).to_dict()
     rows: list[dict[str, Any]] = []
     stats: dict[str, Any] = {
         "n_tracks": 0,
@@ -228,10 +257,9 @@ def associate_scene(
                 )
             extrinsics[view.camera_id] = T_wc
             by_view[view.camera_id] = []
-            for _, h_row in hyps[hyps.image_id == image_id].iterrows():
+            for idx, h_row in hyps[hyps.image_id == image_id].iterrows():
                 h = hypothesis_from_row(h_row)
-                w = hypothesis_weight(h.signals, h.rejection_reason is not None, params.weights)
-                by_view[view.camera_id].append(lift_to_world(h, T_wc, w))
+                by_view[view.camera_id].append(lift_to_world(h, T_wc, float(weights[idx])))
         res = associate(by_view, models, params.association, first_track_id=next_track)
         next_track += len(res.tracks)
         s = association_summary(res)

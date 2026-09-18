@@ -7,6 +7,7 @@ defaults:
   - refiner: pt2plane
   - multiview: strided
   - fusion: mean
+  - confidence: logistic
   - experiment: null
 
 experiment:

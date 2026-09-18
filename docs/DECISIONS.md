@@ -168,9 +168,27 @@ Defined in [`CONTEXT.md`](../CONTEXT.md). Non-negotiable rules:
 - Fitted on held-out *val* splits; evaluated with ROC-AUC, PR-AUC, Brier, ECE, reliability diagram and
   risk–coverage curve. MLP only if logistic clearly under-fits.
 - Verdict thresholds `τ_acc`, `τ_rej` chosen on val for a target precision and reported.
+- *Revised in Delta (Δ2–Δ11, 2026-09-19):* the feature schema is versioned separately from
+  QualitySignals (`binposert/confidence/schema.py`, v1): NaN *or infinite* → 0 + indicator, millimetre
+  distances divided by the diameter, extras `rejected`, `log_diameter`; Model F adds the track shape and
+  the members' Model H probabilities. "Val" = T-LESS scenes {1, 6, 11, 16} (B1) + XYZ-IBD val scenes
+  {0, 20, 40, 60}; everything else is held out. Both models are recalibrated by Platt scaling on
+  scene-grouped out-of-fold logits of the val rows, Model F is fitted on out-of-fold Model H
+  aggregates, and the thresholds are chosen on out-of-fold recalibrated probabilities (τ_acc = lowest
+  threshold with ≥ 95 % accept precision, τ_rej = highest with ≥ 90 % reject precision). Fitted models
+  are JSON files under `models/confidence/<tag>/`, content-fingerprinted into the stage hash. Result:
+  held-out ROC-AUC 91.1 (H) / 92.4 (F), Model F ECE 3.0 % on T-LESS and 8.4 % on XYZ-IBD; the val
+  scenes proved the easiest of both datasets, so the 95 / 90 % bands deliver 89 / 84 % held out
+  (leave-one-scene-out with thresholds transferred between halves of the scenes keeps the 95 %
+  accept precision with representative fit scenes; the reject band is the fragile one). MLP
+  comparator under the same protocol: +0.4 / +0.5 pt AUC, same Brier — logistic kept. `pose_score` and `seg_score` (the estimator's and detector's own
+  scores) are the least portable signals; the ICP residual in diameters carries Model H.
 
 ### D12 — Execution model: stage DAG with a content-addressed disk cache  → [ADR-0002](adr/0002-stage-dag-content-addressed-cache.md)
 - Stages: `segment → coarse_pose → refine → associate → fuse → confidence → nbv → evaluate`.
+  *(Delta: `confidence` rewrites the fuse tables with `confidence` / `verdict` columns; `evaluate` reads
+  the last of `confidence` / `fuse` / `refine` / `coarse_pose` and can rank by any column,
+  `score_signal: confidence` in A8.)*
 - Each stage is a pure function of (upstream artefacts, stage config, stage version string) and writes to
   `outputs/<dataset>/<split>/<stage>/<hash>/`, `hash = sha256(upstream hashes + config + version)`.
   A stage is skipped when its directory contains a `_SUCCESS` marker.
@@ -257,6 +275,7 @@ BinPoseRT/
 ├── docs/            DECISIONS.md  adr/  source/  report/ (later)
 ├── configs/         config.yaml  dataset/ segmenter/ estimator/ refiner/ fusion/ confidence/ nbv/
 │                    experiment/A0..A9.yaml smoke.yaml  benchmark.yaml   (singular: Hydra groups)
+├── models/          confidence/<tag>/{model_h,model_f,thresholds}.json + card.md  (fitted, committed; Delta)
 ├── binposert/       core package (CPU-only imports)
 │   ├── types.py         View, Scene, ObjectModel, SymmetryGroup, Detection, PoseHypothesis,
 │   │                    QualitySignals, ObjectTrack, FusedPose, Verdict            (D7)
@@ -359,7 +378,7 @@ onboarding tool · benchmark scripts (one command per ablation) · results CSV/J
 | 2 Alpha | **done 2026-09-15** | T-LESS BOP19 official AR: A0 59.2 (GT masks + FoundPose), A1 35.4 (CNOS + FoundPose), A5 48.2 (CNOS + MegaPose); core evaluator within 0.3 pt of bop_toolkit; 44 tests, < 15 s; GPU stages ran from host venvs (Docker images written, unbuilt: no container toolkit on the machine) |
 | 3 Beta | **done 2026-09-16** | T-LESS BOP19 official AR 35.4 → 47.8 (A2, depth init + point-to-plane ICP); robust 47.9, GICP 47.3. Depth initialisation of the translation added (D8); silhouette gate demoted to a signal after a val-scene sweep; renderer made single-threaded (Open3D parallel raycast corrupts under load). 71 tests, < 60 s; CPU only, from Alpha's caches |
 | 4 Gamma | **done 2026-09-17** | Multi-view association + fusion (D10) on T-LESS and XYZ-IBD val. T-LESS BOP19 AR core/official, 1 → 4 fused views (mean): 50.9/51.1 → 63.9/64.2 → 69.2/69.5 → 72.3/72.5; XYZ-IBD (core, 255 val images, 15 objects × 10–59 copies): 22.6 → 30.9 → 36.5 → 38.3 (best) / 37.3 (mean). Association vs GT instances: T-LESS purity 100 %, completeness 95 %; XYZ-IBD purity 89–93 %, completeness 86–89 % (stacked copies < 0.5 d apart). Joint ICP polish below or equal to the mean at every k on both datasets — D10 step 4 dropped from the default. Extrinsic sweep: 2 mm / 0.25° costs < 2 pt (T-LESS) / 0.5 pt (XYZ-IBD). Depth↔RGB offset estimated GT-free (T-LESS −3.3 px → +3.3 AR single view; XYZ-IBD 0). `multiview/`, `associate`/`fuse` stages, A6/A7, per-camera dataset views, `check_gamma.py`; 97 tests, < 60 s |
-| 5 Delta | not started | |
+| 5 Delta | **done 2026-09-19** | ConfidenceModels H / F (D11) on T-LESS + XYZ-IBD: logistic on the versioned schema, fitted on 8 val scenes, Platt-recalibrated out of fold. Held-out ROC-AUC 91.1 / 92.4 (F rises 90 → 96 with 1 → 4 views on T-LESS), Brier 0.127 / 0.112, ECE 8.1 / 4.5 % (T-LESS F 3.0 %); Verdict bands 89 / 84 % precision held out vs 95 / 90 % targets — the pre-registered val scenes are the easiest (LOSO: 95 / 90 % reachable). Cross-dataset: ranking transfers, calibration does not. `confidence` stage, A8 rows (BOP score = Confidence) and Model-H fusion weights; confident-failure gallery; update-path profile; 109 tests, < 70 s |
 | 6 Stretch | not started | |
 
 ## Change log
@@ -415,3 +434,28 @@ onboarding tool · benchmark scripts (one command per ablation) · results CSV/J
   stacked copies closer than the 0.5 d gate. Evaluate renders each pose once for VSD (n + m renders per
   image instead of 2 nm); scene pools resubmit the jobs of a worker that died (the raycast corruption also
   segfaults, which hung `multiprocessing.Pool`). Tables: `docs/results_gamma_xyzibd.md`.
+- 2026-09-17/19 — Delta closed; D11 revised from evidence, D18 gains `models/`. (1) *Schema*: one versioned
+  feature schema for single- and multi-view rows (NaN / inf → 0 + indicator, mm / diameter); labels are
+  the nearest-annotation MSSD in the camera frame (hypotheses) or the world frame (FusedPoses, against
+  every View of the group). (2) *Split*: the pre-registered val scenes (every fifth: T-LESS {1, 6, 11, 16}
+  from B1, XYZ-IBD {0, 20, 40, 60}) are the easiest of both datasets (leave-one-scene-out AUC 0.98 on them,
+  0.92 on the rest); models fitted there keep 90–93 % held-out ROC-AUC but the 95 / 90 % Verdict bands
+  deliver 89 / 84 % — reported as is, with the leave-one-scene-out rows (ECE 2.2–2.6 %; thresholds
+  chosen on one half of the scenes keep 95 % accept precision on the other, covering 18–26 % and
+  deferring 24–35 %) as the achievable reference. (3) *Recalibration*: Platt on out-of-fold
+  logits, out-of-fold Model H features for Model F, out-of-fold thresholds — in-sample fits on 8 scenes
+  are over-confident (Model F ECE 7.2 → 4.5 %). (4) *Signals*: the ICP residual in diameters carries
+  both models (−1.1 / −1.0 pt AUC without it); FoundPose's `pose_score` and CNOS's `seg_score` hurt
+  held out (+1.1 / +0.7 pt without `pose_score`); the members' dispersion is Model F's own signal;
+  Model F's AUC rises 90 → 96 from one to four views. (5) *Cross-dataset*: ranking transfers (−1.5 pt),
+  calibration does not (ECE 12–19 %). (6) MLP under the same protocol: +0.4 / +0.5 pt AUC, same Brier;
+  logistic kept. (7) *A8*: ranking BOP predictions
+  by Confidence is worth +1.1 / +2.6 / +3.3 AR on T-LESS with 2 / 3 / 4 views (official 72.5 → 75.9);
+  Model H as the fusion weight ±0.2 — product weights stay. (8) *Update path* (D13, single thread,
+  quiet machine): 0.51 s median / 0.74 s p95 per track, 95 % of it the refinement, half of that inside
+  Open3D's ICP — the 200 ms target is not reachable by porting Python to C++ (D6); the candidates are a
+  cheaper ICP schedule, a cached ray grid and fewer numpy round trips (Δ16). (9) A job whose worker
+  reports corrupted render output is resubmitted to a fresh process (Δ18; the XYZ-IBD evaluate died
+  twice on a flipped index bit). Tables: `docs/results_delta.md`.
+  **Scope frozen** at this gate (MILESTONES week 12; 2026-09-19): the must-have list (Foundations → Delta) is
+  complete; Epsilon and Deployment stay stretch, Finalisation is next, nothing new enters must-have.

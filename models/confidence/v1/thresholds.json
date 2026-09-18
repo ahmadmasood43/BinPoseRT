@@ -1,0 +1,10 @@
+{
+ "tau_accept": 0.8233727309590134,
+ "tau_reject": 0.6751315827813688,
+ "accept_precision": 0.95,
+ "reject_precision": 0.9,
+ "min_band_rows": 20,
+ "n_fit_rows": 5638,
+ "accept_satisfiable": true,
+ "reject_satisfiable": true
+}

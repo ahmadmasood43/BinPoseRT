@@ -1,0 +1,10 @@
+# D11: Model H (per refined PoseHypothesis) and Model F (per FusedPose), logistic regressions on the
+# versioned QualitySignals schema, fitted on the val scenes by tools/fit_confidence.py; the Verdict
+# thresholds were chosen there for the target precisions recorded in the file. The files' content
+# hashes enter the stage hash, so a refit invalidates the cache.
+name: logistic
+version: 1
+params:
+  model_h: models/confidence/v1/model_h.json
+  model_f: models/confidence/v1/model_f.json
+  thresholds: models/confidence/v1/thresholds.json

@@ -6,11 +6,12 @@ Given one or more calibrated RGB-D views of a cluttered bin and CAD models of th
 returns, for every visible physical object, a world-frame pose `T_world_object`, a **calibrated
 confidence** that the pose is correct, and a **verdict** (`accept` / `reject` / `request_view`).
 
-> Status: **Gamma complete** (increment 4 of 6, 2026-09-17): multi-view association and fusion.
-> A GT-free depth↔RGB calibration takes the T-LESS single-view chain from 47.8 to 51.1 AR and fusing
-> four calibrated views takes it to 72.5; on XYZ-IBD's 10–59-copy bins four views take 22.6 to 38.3.
-> Next: Delta (calibrated confidence and verdicts). See [docs/MILESTONES.md](docs/MILESTONES.md).
-> Numbers in this README only ever come from `outputs/` run manifests.
+> Status: **Delta complete** (increment 5 of 6, 2026-09-19): calibrated confidence and verdicts.
+> Two logistic models on the pose signals predict failure with 0.90–0.93 held-out ROC-AUC on T-LESS and
+> XYZ-IBD (0.96 for four-view fused poses); calibration is 3 % ECE on T-LESS, 8 % on XYZ-IBD, and the
+> verdict bands chosen for 95 / 90 % precision deliver 89 / 84 % held out because the pre-registered val
+> scenes are the easiest ones. Next: Finalisation (stretch Epsilon / Deployment if time allows).
+> See [docs/MILESTONES.md](docs/MILESTONES.md). Numbers in this README only ever come from `outputs/`.
 
 ## What it does
 
@@ -50,10 +51,10 @@ stage *costs* 1.3 points (A5r): ICP moves already-good poses by a constant ~2.5 
 depth↔RGB offset of the sensor data, to be calibrated without GT in Gamma. CNOS still costs the most:
 15 % of targets get no prediction and AR stays ~1 % below 30 % visibility.
 
-| Dataset | AR (VSD/MSSD/MSPD), single view | Δ from refinement | Δ from depth↔RGB calibration | Δ from fusion (2 / 3 / 4 views) | Update-path p95 |
-|---|---|---|---|---|---|
-| T-LESS | 51.1 (48.0 / 51.4 / 53.2) | +12.4 (35.4 → 47.8) | +3.3 (47.8 → 51.1, GT-free estimate) | +13.1 / +18.4 / **+21.4** (→ 64.2 / 69.5 / 72.5) | TBD (refine 0.79 s / hyp; associate + fuse ms) |
-| XYZ-IBD (val, core) | 22.6 (20.4 / 23.4 / 23.9) | in the chain | none needed (0 px) | +8.3 / +13.9 / **+15.7** (→ 30.9 / 36.5 / 38.3, best) | TBD |
+| Dataset | AR (VSD/MSSD/MSPD), single view | Δ from refinement | Δ from depth↔RGB calibration | Δ from fusion (2 / 3 / 4 views) | Δ from Confidence ranking (2 / 3 / 4 views, official) | Update-path p95 (Python) |
+|---|---|---|---|---|---|---|
+| T-LESS | 51.1 (48.0 / 51.4 / 53.2) | +12.4 (35.4 → 47.8) | +3.3 (47.8 → 51.1, GT-free estimate) | +13.1 / +18.4 / **+21.4** (→ 64.2 / 69.5 / 72.5) | +1.1 / +2.6 / **+3.4** (→ 65.3 / 72.1 / 75.9) | **0.74 s** (refine 0.33 s / hyp; associate + fuse + confidence 36 ms; single thread, quiet machine) |
+| XYZ-IBD (val, core) | 22.6 (20.4 / 23.4 / 23.9) | in the chain | none needed (0 px) | +8.3 / +13.9 / **+15.7** (→ 30.9 / 36.5 / 38.3, best) | +0.3 / +1.0 / **+1.8** (→ 30.6 / 36.8 / 39.1, core) | — |
 
 Gamma (multi-view, [`docs/results_gamma_tless.md`](docs/results_gamma_tless.md)): the depth map of the
 T-LESS sensor sits 3.3 px below the RGB image, measured from edge alignment on val scenes with no pose
@@ -68,12 +69,27 @@ Calibration errors of 2 mm / 0.25° cost under 2 points. On XYZ-IBD
 stays 89–93 % pure on stacked copies, and picking the best-weighted view edges out averaging there
 because members already agree to under a millimetre.
 
+Delta (confidence, [`docs/results_delta.md`](docs/results_delta.md)): every FusedPose now carries a
+Confidence from a logistic model on the versioned signal schema (ICP residual in diameters, silhouette
+IoU, ICP displacement, the members' dispersion and view count) and a Verdict. Held out, Model H (per
+hypothesis) reaches 91.1 ROC-AUC and Model F (per fused pose) 92.4, rising from 90 to 96 as the view count
+goes 1 → 4; Brier 0.11–0.13. Ranking BOP predictions by Confidence instead of the estimator's score
+is worth +1.1 / +2.6 / +3.3 AR on T-LESS with 2 / 3 / 4 views (official 72.5 → 75.9 at four) and
++0.3 / +1.0 / +1.8 on XYZ-IBD, nothing with one; Model H as the fusion weight changes AR by under
+0.6 and is not the default. The
+estimator's and detector's own scores are the least portable signals (dropping `pose_score` *gains*
+1 pt held out); discrimination transfers across datasets but calibration does not (ECE 12–19 %).
+The verdict bands miss their targets because every fifth scene — the val rule fixed in Beta — turned
+out to be the easiest fifth; leave-one-scene-out shows 95 / 90 % precision is reachable with
+representative fit scenes, accepting 22 % of poses outright and deferring 28 %.
+
 ## Project documents
 
 - [`docs/DECISIONS.md`](docs/DECISIONS.md) — the single decision record: scope, architecture, milestones, ablations, risks
 - [`docs/MILESTONES.md`](docs/MILESTONES.md) — the dated milestone plan: weekly tasks, exit criteria, slip policy
 - [`docs/milestone_beta_decision.md`](docs/milestone_beta_decision.md) — the Beta decision log: what was decided, on what evidence, and what was not chosen
-- [`docs/milestone_gamma_decision.md`](docs/milestone_gamma_decision.md) — the Gamma decision log (G1–G17)
+- [`docs/milestone_gamma_decision.md`](docs/milestone_gamma_decision.md) — the Gamma decision log (G1–G21)
+- [`docs/milestone_delta_decision.md`](docs/milestone_delta_decision.md) — the Delta decision log (Δ1–Δ18)
 - [`CONTEXT.md`](CONTEXT.md) — the project vocabulary (Detection → PoseHypothesis → ObjectTrack → FusedPose)
 - [`docs/adr/`](docs/adr/) — the four hard-to-reverse decisions
 - [`docs/source/`](docs/source/) — the original research plan this project was derived from
@@ -103,6 +119,9 @@ uv run python tools/report.py A0 A1 A5
 tools/run_alpha.sh                                                       # all of the above
 tools/run_beta.sh                                                        # A2 A3 A4 + refinement analysis (CPU only)
 uv run python tools/refine_report.py --before A1 A2 A3 A4                # stratified before/after, gate stats, sweep, galleries
+tools/run_gamma.sh                                                       # A6/A7 AR-vs-views rows + extrinsic sweep (CPU only)
+tools/run_delta.sh                                                       # labelled tables, confidence models, A8 rows, report
+uv run python tools/fit_confidence.py --tag v2                           # refit Model H / F + calibration analysis
 ```
 
 Every stage is a pure function of its inputs, config and version, cached by content hash and skipped

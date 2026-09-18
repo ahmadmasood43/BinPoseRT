@@ -21,7 +21,7 @@ anything slips. Finalisation is protected: it never shrinks to absorb overrun.
 | 2 | **Alpha** — baseline | 1–3 | 2026-09-14 → 2026-10-04 | GPU (adapters once), then laptop | A0, A1, A5 | **done 2026-09-15** |
 | 3 | **Beta** — refinement | 4–6 | 2026-10-05 → 2026-10-25 | GPU machine (CPU only, from Alpha's caches) | A2, A3, A4 | **done 2026-09-16** |
 | 4 | **Gamma** — multi-view | 7–9 | 2026-10-26 → 2026-11-15 | GPU machine (CPU from caches; GPU once for XYZ-IBD) | A6, A7 | **done 2026-09-17** |
-| 5 | **Delta** — reliability | 10–12 | 2026-11-16 → 2026-12-06 | laptop | A8 | not started |
+| 5 | **Delta** — reliability | 10–12 | 2026-11-16 → 2026-12-06 | GPU machine (CPU only, from Gamma's caches) | A8 | **done 2026-09-19** |
 | 6a | **Epsilon** — active view *(stretch)* | 13–14 | 2026-12-07 → 2026-12-20 | laptop | A9 | not started |
 | 6b | **Deployment** *(stretch)* | 13–14 | 2026-12-07 → 2026-12-20 | GPU machine | A10 | not started |
 | 7 | **Finalisation** | 15–17 | 2026-12-21 → 2027-01-10 | — | — | not started |
@@ -36,7 +36,7 @@ gantt
     Alpha (baseline)       :done,    m2, 2026-09-14, 2026-09-15
     Beta (refinement)      :done,    m3, 2026-09-15, 2026-09-16
     Gamma (multi-view)     :done,    m4, 2026-09-16, 2026-09-17
-    Delta (reliability)    :         m5, 2026-11-16, 2026-12-06
+    Delta (reliability)    :done,    m5, 2026-09-17, 2026-09-19
     section Stretch
     Epsilon (active view)  :         m6, 2026-12-07, 2026-12-20
     Deployment (C++/TRT)   :         m7, 2026-12-07, 2026-12-20
@@ -240,7 +240,8 @@ defaults in `configs/refiner/*.yaml`.
   offset, and MegaPose has far more already-good poses to damage. Estimator dependency answered: the
   stage is for RGB-only coarse poses; on a depth-aware estimator only the initialisation is worth keeping.
 - Costs: 0.8–1.0 s per hypothesis single-threaded (≈ 5 renders + 3 ICP stages); the Delta update-path
-  budget (p95 < 200 ms) will need a GPU renderer or a smaller crop.
+  budget (p95 < 200 ms) will need a GPU renderer or a smaller crop. *(Delta's profile: 0.28 s per
+  hypothesis on a quiet machine, half of it inside Open3D's ICP — see Milestone 6b.)*
 
 ### Risks specific to this milestone
 | Risk | Response | Outcome |
@@ -305,9 +306,9 @@ galleries (`<fuse dir>/analysis/gallery/`) · decision log `docs/milestone_gamma
 
 ---
 
-## Milestone 5 — Delta: confidence and verdict
+## Milestone 5 — Delta: confidence and verdict ✅
 
-**Weeks 10–12 · 2026-11-16 → 2026-12-06 · A8 · answers RQ-D**
+**Weeks 10–12 · 2026-11-16 → 2026-12-06 · A8 · answers RQ-D · closed 2026-09-19**
 
 **Goal.** Every FusedPose carries a calibrated Confidence and a Verdict, and the calibration is measured
 honestly on held-out data.
@@ -315,44 +316,54 @@ honestly on held-out data.
 ### Tasks
 
 Week 10 — Schema and data
-- [ ] `binposert/confidence/schema.py`: versioned QualitySignals field list; NaN → constant + indicator
+- [x] `binposert/confidence/schema.py`: versioned QualitySignals field list; NaN → constant + indicator
       flag so single-view and multi-view rows share one schema (D11)
-- [ ] Labelled table builder: every refined PoseHypothesis and FusedPose from Beta/Gamma caches with
-      `success = MSSD < 0.1 · diameter`
-- [ ] Split discipline: fit on *val*, evaluate on *test*; no T-LESS/XYZ-IBD leakage across splits
-- [ ] Synthetic test: synthetic pass/fail signals → AUC > 0.9
+- [x] Labelled table builder: every refined PoseHypothesis and FusedPose from Beta/Gamma caches with
+      `success = MSSD < 0.1 · diameter` (`tools/build_confidence_table.py`)
+- [x] Split discipline: fit on *val*, evaluate on *test*; no T-LESS/XYZ-IBD leakage across splits
+      (val = T-LESS {1, 6, 11, 16} + XYZ-IBD {0, 20, 40, 60}; Δ2)
+- [x] Synthetic test: synthetic pass/fail signals → AUC > 0.9
 
 Week 11 — Models
-- [ ] Model H (per PoseHypothesis): logistic regression on QualitySignals; feed its probability into
-      fusion weights as an optional D10 weighting and measure the AR delta
-- [ ] Model F (per FusedPose): logistic regression on aggregated track signals → the published Confidence
-- [ ] Calibration analysis: ROC-AUC, PR-AUC, Brier, ECE, reliability diagram, risk–coverage curve
-- [ ] MLP comparator only if logistic clearly under-fits (D11); record the decision either way
-- [ ] Verdict thresholds τ_acc, τ_rej chosen on val for a target precision; reported with the resulting
+- [x] Model H (per PoseHypothesis): logistic regression on QualitySignals; feed its probability into
+      fusion weights as an optional D10 weighting and measure the AR delta (A8w rows)
+- [x] Model F (per FusedPose): logistic regression on aggregated track signals → the published Confidence
+- [x] Calibration analysis: ROC-AUC, PR-AUC, Brier, ECE, reliability diagram, risk–coverage curve
+- [x] MLP comparator only if logistic clearly under-fits (D11); record the decision either way (kept
+      logistic: +1 pt AUC, worse calibration)
+- [x] Verdict thresholds τ_acc, τ_rej chosen on val for a target precision; reported with the resulting
       accept / reject / request_view rates
 
 Week 12 — Integration and closure
-- [ ] `confidence` stage wired into the DAG; `FusedPose` artefact gains `confidence` and `verdict` columns
-- [ ] `configs/experiments/A8.yaml`; full pipeline A8 on T-LESS and XYZ-IBD
-- [ ] Feature-importance / ablate-one-signal table (which QualitySignals carry the prediction)
-- [ ] Gallery: confident failures (high Confidence, wrong pose) — the most important figure in the report
-- [ ] **Profiling pass** (D6 precondition): per-stage timings of the update path in Python; note candidates
+- [x] `confidence` stage wired into the DAG; `FusedPose` artefact gains `confidence` and `verdict` columns
+- [x] `configs/experiments/A8.yaml`; full pipeline A8 on T-LESS and XYZ-IBD
+- [x] Feature-importance / ablate-one-signal table (which QualitySignals carry the prediction)
+- [x] Gallery: confident failures (high Confidence, wrong pose) — the most important figure in the report
+- [x] **Profiling pass** (D6 precondition): per-stage timings of the update path in Python; note candidates
       for C++ ports
-- [ ] Update DECISIONS.md; **freeze scope** — after this gate nothing new enters the must-have list
+- [x] Update DECISIONS.md; **freeze scope** — after this gate nothing new enters the must-have list
 
-### Exit criterion
-Models H/F fitted on val; ROC/PR/Brier/ECE, reliability diagram, risk–coverage; every FusedPose carries
-Confidence + Verdict.
+### Exit criterion (met 2026-09-19)
+Models H / F fitted on the val scenes (`models/confidence/v1/`); held-out ROC-AUC 91.1 / 92.4, PR-AUC
+90.7 / 90.7, Brier 0.127 / 0.112, ECE 8.1 / 4.5 % (Model F on T-LESS 3.0 %); reliability diagrams and
+risk–coverage curves in `outputs/confidence/v1/`; every FusedPose of the A8 rows carries Confidence +
+Verdict. The Verdict bands chosen for 95 / 90 % precision deliver 89 / 84 % held out — the
+pre-registered val scenes are the easiest of both datasets; leave-one-scene-out shows the targets are
+reachable with representative fit scenes. Verified by `tools/check_delta.py` (136 checks); tables in
+`docs/results_delta.md`.
 
 ### Deliverables
-`binposert/confidence/` · fitted model files + versioned schema · calibration figure set · Verdict
-thresholds · confident-failure gallery · update-path profile.
+`binposert/confidence/` · fitted model files + versioned schema (`models/confidence/v1/`, card) ·
+calibration figure set (`docs/figures/delta_*.png`) · Verdict thresholds · confident-failure gallery ·
+update-path profile (`outputs/tless_update_path_profile.json`) · decision log
+`docs/milestone_delta_decision.md`.
 
 ### Risks specific to this milestone
 | Risk | Response |
 |---|---|
-| Too few failures to fit on (T-LESS after refinement) | Pool T-LESS + XYZ-IBD val; add a controlled-perturbation augmentation of GT poses as additional negatives, clearly labelled as such. |
-| Calibration looks good only in-distribution | Report per-dataset ECE separately; cross-dataset fit/eval as an extra row. |
+| Too few failures to fit on (T-LESS after refinement) | Pool T-LESS + XYZ-IBD val; add a controlled-perturbation augmentation of GT poses as additional negatives, clearly labelled as such. *(Not needed: 41–53 % of rows are failures.)* |
+| Calibration looks good only in-distribution | Report per-dataset ECE separately; cross-dataset fit/eval as an extra row. *(Done: ranking transfers, calibration does not — ECE 12–19 % cross-dataset.)* |
+| *(hit)* The val scenes are unrepresentative | Reported as is; leave-one-scene-out rows show the achievable calibration; a representative val split is a Finalisation note, not a post-hoc re-selection. |
 
 ---
 
@@ -384,7 +395,14 @@ NBV over real views beats random-next on AR-vs-views; grasp transform chain visu
 **Weeks 13–14 · 2026-12-07 → 2026-12-20 · A10 · answers RQ-F**
 
 Attempted only after Delta's profile shows a clear hot path. `cpp/` does not exist before this
-(ADR-0001).
+(ADR-0001). *Delta's profile (`outputs/tless_update_path_profile.json`, Δ16): the update path is
+0.51 s median / 0.74 s p95 per track, 95 % of it the refinement (0.28 s per hypothesis); inside the
+refinement 49 % is Open3D's `registration_icp` — already C++ — 20 % numpy reductions over
+full-resolution masks, 13 % tensor ↔ numpy conversions, 8 % rebuilding the pinhole ray grid per
+render. A port of the Python parts can at best halve the refine time; the 200 ms target needs a
+cheaper ICP schedule (fewer levels / iterations / points, the Pareto below) or a GPU registration,
+so the "C++ ports" task is reframed: profile-guided Python fixes first (ray-grid cache, reductions
+on the crop), then the ICP schedule sweep, and C++ only if a Python-side hot spot remains.*
 
 ### Tasks
 - [ ] Freeze `configs/benchmark.yaml`: 50 warm-up, 1000 timed, batch 1, CUDA synchronised, `perf_counter`

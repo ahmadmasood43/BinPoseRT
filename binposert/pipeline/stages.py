@@ -60,6 +60,7 @@ STAGE_VERSIONS = {
     "refine": "4",
     "associate": "1",
     "fuse": "1",
+    "confidence": "1",
     "evaluate": "8",
 }
 
@@ -240,7 +241,10 @@ def associate_stage(ctx: StageContext, out_dir: Path, upstream: dict[str, StageR
 
     source = upstream.get("refine") or upstream["coarse_pose"]
     summary = run_associate(
-        ctx.dataset, source.dir, out_dir, associate_params_from_config(ctx.cfg["multiview"])
+        ctx.dataset,
+        source.dir,
+        out_dir,
+        associate_params_from_config(ctx.cfg["multiview"], ctx.repo_root),
     )
     with open(out_dir / "associate_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
@@ -272,12 +276,36 @@ def fuse_stage(ctx: StageContext, out_dir: Path, upstream: dict[str, StageRef]) 
     log.info("fused %d tracks (%s): %s", summary["n_tracks"], summary["method"], summary)
 
 
+def confidence_stage(ctx: StageContext, out_dir: Path, upstream: dict[str, StageRef]) -> None:
+    from binposert.pipeline.confidence_stage import params_from_config, run_confidence
+
+    summary = run_confidence(
+        ctx.dataset,
+        upstream["associate"].dir,
+        upstream["fuse"].dir,
+        out_dir,
+        params_from_config(ctx.cfg["confidence"], ctx.repo_root),
+    )
+    log.info(
+        "confidence on %d %s: mean %.3f, verdicts %s",
+        summary["n_fused"] or summary["n_hypotheses"],
+        summary["scored"],
+        summary["mean_confidence"] or float("nan"),
+        summary["verdict_rates"],
+    )
+
+
 def evaluate_stage(ctx: StageContext, out_dir: Path, upstream: dict[str, StageRef]) -> None:
     section = ctx.cfg["evaluate"]
-    source = upstream.get("fuse") or upstream.get("refine") or upstream["coarse_pose"]
+    source = (
+        upstream.get("confidence")
+        or upstream.get("fuse")
+        or upstream.get("refine")
+        or upstream["coarse_pose"]
+    )
     table = read_hypotheses_table(source.dir)
     images: set[tuple[int, int]] | None = None
-    if source.stage == "fuse":
+    if source.stage in ("fuse", "confidence"):
         # multi-view rows are scored on the images of their view groups only
         from binposert.pipeline.multiview_stage import GROUPS_FILE
 
@@ -419,6 +447,7 @@ STAGES: dict[str, StageFn] = {
     "refine": refine_stage,
     "associate": associate_stage,
     "fuse": fuse_stage,
+    "confidence": confidence_stage,
     "evaluate": evaluate_stage,
 }
 
@@ -428,14 +457,16 @@ STAGE_INPUTS: dict[str, list[str]] = {
     "refine": ["segment", "coarse_pose"],
     "associate": ["coarse_pose", "refine"],
     "fuse": ["segment", "associate"],
-    "evaluate": ["coarse_pose", "refine", "fuse"],
+    "confidence": ["associate", "fuse"],
+    "evaluate": ["coarse_pose", "refine", "fuse", "confidence"],
 }
 
 
 DEPTH_STAGES = ("refine", "fuse", "evaluate")
 
 
-def stage_config(cfg: dict[str, Any], stage: str) -> dict[str, Any]:
+def stage_config(cfg: dict[str, Any], stage: str, repo_root: Path | None = None) -> dict[str, Any]:
+    root = repo_root or Path(__file__).resolve().parents[2]
     if stage == "segment":
         return hashable_config(cfg["segmenter"])
     if stage == "coarse_pose":
@@ -444,8 +475,22 @@ def stage_config(cfg: dict[str, Any], stage: str) -> dict[str, Any]:
         section = hashable_config(cfg["refiner"])
     elif stage == "associate":
         section = hashable_config(cfg["multiview"])
+        weights = section.get("params", {}).get("weights", {})
+        if weights.get("source", "product") == "model_h":
+            # the config names the model file; its content decides the weights
+            from binposert.confidence import file_fingerprint
+
+            path = Path(str(weights["model_h"]))
+            if not path.is_absolute():
+                path = root / path
+            section = {**section, "model_h_fingerprint": file_fingerprint(path)}
     elif stage == "fuse":
         section = hashable_config(cfg["fusion"])
+    elif stage == "confidence":
+        from binposert.pipeline.confidence_stage import model_fingerprints
+
+        section = hashable_config(cfg["confidence"])
+        section = {**section, "fingerprints": model_fingerprints(cfg["confidence"], root)}
     else:
         section = hashable_config(cfg.get(stage, {}))
     # a depth↔RGB shift in the dataset config changes what every depth-reading stage sees
@@ -469,7 +514,9 @@ def resolve_refs(ctx: StageContext, stages: list[str]) -> dict[str, StageRef]:
     refs: dict[str, StageRef] = {}
     for name in stages:
         ups = [refs[u] for u in STAGE_INPUTS[name] if u in refs]
-        refs[name] = ctx.cache.ref(name, STAGE_VERSIONS[name], stage_config(ctx.cfg, name), ups)
+        refs[name] = ctx.cache.ref(
+            name, STAGE_VERSIONS[name], stage_config(ctx.cfg, name, ctx.repo_root), ups
+        )
     return refs
 
 
@@ -480,7 +527,7 @@ def run_pipeline(ctx: StageContext, stages: list[str], manifest: RunManifest) ->
             raise ValueError(f"stage {name!r} is not implemented yet")
         ups = {u: refs[u] for u in STAGE_INPUTS[name] if u in refs}
         version = STAGE_VERSIONS[name]
-        config = stage_config(ctx.cfg, name)
+        config = stage_config(ctx.cfg, name, ctx.repo_root)
         ref = ctx.cache.ref(name, version, config, list(ups.values()))
         t0 = time.perf_counter()
         if ref.complete:

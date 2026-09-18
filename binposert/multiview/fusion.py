@@ -9,8 +9,9 @@ equivalent ones. The fused pose is then the weighted intrinsic mean on SE(3).
 Weights are a hand-set product of per-view QualitySignals (segmentation score, ICP fitness, depth
 coverage, visible fraction); a signal that is NaN simply drops out of the product. A hypothesis the
 Refinement rejected still carries its coarse pose and takes part with a reduced weight, because a
-track whose every member was rejected must still yield a pose. Delta replaces the product by Model
-H's probability (D11) without touching this module's interface.
+track whose every member was rejected must still yield a pose. With ``WeightParams.source =
+"model_h"`` the associate stage uses Model H's probability instead (D11, Delta); this module only
+knows the product.
 """
 
 from __future__ import annotations
@@ -41,7 +42,9 @@ AGGREGATED_SIGNALS = (
 
 @dataclass(frozen=True)
 class WeightParams:
-    """``weight = Π signal^exponent`` over the listed signals (NaN signals skipped), floored."""
+    """``weight = Π signal^exponent`` over the listed signals (NaN signals skipped), floored — or,
+    with ``source = "model_h"``, Model H's probability that the hypothesis is correct (D11), which
+    already accounts for a rejection; ``model_h`` names the fitted model file."""
 
     exponents: dict[str, float] = field(
         default_factory=lambda: {
@@ -53,6 +56,8 @@ class WeightParams:
     )
     rejected_factor: float = 0.2  # multiplier for hypotheses the Refinement rejected
     floor: float = 1e-3
+    source: str = "product"  # "product" | "model_h"
+    model_h: str = ""
 
 
 @dataclass(frozen=True)
