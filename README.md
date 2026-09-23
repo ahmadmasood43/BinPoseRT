@@ -6,11 +6,18 @@ Given one or more calibrated RGB-D views of a cluttered bin and CAD models of th
 returns, for every visible physical object, a world-frame pose `T_world_object`, a **calibrated
 confidence** that the pose is correct, and a **verdict** (`accept` / `reject` / `request_view`).
 
-> Status: **Delta complete** (increment 5 of 6, 2026-09-19): calibrated confidence and verdicts.
-> Two logistic models on the pose signals predict failure with 0.90–0.93 held-out ROC-AUC on T-LESS and
-> XYZ-IBD (0.96 for four-view fused poses); calibration is 3 % ECE on T-LESS, 8 % on XYZ-IBD, and the
-> verdict bands chosen for 95 / 90 % precision deliver 89 / 84 % held out because the pre-registered val
-> scenes are the easiest ones. Next: Finalisation (stretch Epsilon / Deployment if time allows).
+> Status: **Epsilon closed** (increment 6a of 7, 2026-09-23, stretch): uncertainty-driven
+> next-best-view over real camera views does not beat random-next on AR-vs-views — reported as a
+> negative result. On the full run (XYZ-IBD 60 episodes across four start groups, T-LESS 20) the
+> D14 score, random next and the strided view order land within one paired 95 % interval at every
+> budget, while a ground-truth oracle shows +7–17 AR is available: a View's worth on these bins is
+> the copies the detector finds in it (ρ = 0.71 / 0.62 with the oracle's gain), not its geometry
+> (ρ = 0.04 / 0.10 with the D14 score). The grasp transform chain is implemented and visualised.
+> Delta (increment 5, 2026-09-19): two logistic models predict pose failure with 0.90–0.93
+> held-out ROC-AUC on T-LESS and XYZ-IBD (0.96 for four-view fused poses); calibration is 3 % ECE
+> on T-LESS, 8 % on XYZ-IBD, and the verdict bands chosen for 95 / 90 % precision deliver 89 / 84 %
+> held out because the pre-registered val scenes are the easiest ones. Next: Finalisation
+> (stretch Deployment if time allows).
 > See [docs/MILESTONES.md](docs/MILESTONES.md). Numbers in this README only ever come from `outputs/`.
 
 ## What it does
@@ -20,7 +27,8 @@ confidence** that the pose is correct, and a **verdict** (`accept` / `reject` / 
 - symmetry-aware evaluation and fusion
 - calibrated multi-view SE(3) fusion
 - confidence / failure prediction with calibration analysis
-- *(stretch)* uncertainty-driven next-best-view over real camera views
+- *(stretch)* uncertainty-driven next-best-view over real camera views, with a GT oracle as the ceiling
+  and a simulated pick (`T_robot_gripper` chain, Open3D)
 
 "RT" refers to one explicit budget: the **update path** (refine → associate → fuse → confidence for one
 object, given cached detections) targets p95 < 200 ms; the full pipeline latency is measured and reported,

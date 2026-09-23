@@ -1,0 +1,21 @@
+# @package _global_
+# A9 — does uncertainty-driven next-best-view beat fixed and random view orders? (RQ-E): the A8
+# chain (CNOS -> FoundPose -> pt2plane refinement -> association -> weighted SE(3) mean ->
+# confidence) run as an active loop over each scene's real Views (D14). Rows: A9_<policy>_b<budget>
+# per view budget (nbv.params.policy={nbv,random,fixed} nbv.params.budget=k), A9_<policy>_verdict
+# for the Verdict-stopped loop; every row is evaluated on the same reference Views.
+defaults:
+  - override /segmenter: cnos
+  - override /estimator: foundpose
+  - override /refiner: pt2plane
+  - override /multiview: strided
+  - override /fusion: mean
+  - override /confidence: logistic
+  - override /nbv: disagreement
+
+experiment:
+  name: A9
+  question: "does uncertainty-driven next-best-view beat fixed and random view orders? (RQ-E)"
+stages: [segment, coarse_pose, refine, nbv, evaluate]
+evaluate:
+  score_signal: confidence

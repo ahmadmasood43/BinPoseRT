@@ -8,6 +8,7 @@ defaults:
   - multiview: strided
   - fusion: mean
   - confidence: logistic
+  - nbv: disagreement
   - experiment: null
 
 experiment:

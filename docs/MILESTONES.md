@@ -22,7 +22,7 @@ anything slips. Finalisation is protected: it never shrinks to absorb overrun.
 | 3 | **Beta** — refinement | 4–6 | 2026-10-05 → 2026-10-25 | GPU machine (CPU only, from Alpha's caches) | A2, A3, A4 | **done 2026-09-16** |
 | 4 | **Gamma** — multi-view | 7–9 | 2026-10-26 → 2026-11-15 | GPU machine (CPU from caches; GPU once for XYZ-IBD) | A6, A7 | **done 2026-09-17** |
 | 5 | **Delta** — reliability | 10–12 | 2026-11-16 → 2026-12-06 | GPU machine (CPU only, from Gamma's caches) | A8 | **done 2026-09-19** |
-| 6a | **Epsilon** — active view *(stretch)* | 13–14 | 2026-12-07 → 2026-12-20 | laptop | A9 | not started |
+| 6a | **Epsilon** — active view *(stretch)* | 13–14 | 2026-12-07 → 2026-12-20 | GPU machine (CPU only, from Delta's caches) | A9 | **closed 2026-09-23** (exit criterion not met — negative result with a measured ceiling) |
 | 6b | **Deployment** *(stretch)* | 13–14 | 2026-12-07 → 2026-12-20 | GPU machine | A10 | not started |
 | 7 | **Finalisation** | 15–17 | 2026-12-21 → 2027-01-10 | — | — | not started |
 
@@ -38,7 +38,7 @@ gantt
     Gamma (multi-view)     :done,    m4, 2026-09-16, 2026-09-17
     Delta (reliability)    :done,    m5, 2026-09-17, 2026-09-19
     section Stretch
-    Epsilon (active view)  :         m6, 2026-12-07, 2026-12-20
+    Epsilon (active view)  :done,    m6, 2026-09-19, 2026-09-23
     Deployment (C++/TRT)   :         m7, 2026-12-07, 2026-12-20
     section Wrap-up
     Finalisation           :crit,    m8, 2026-12-21, 2027-01-10
@@ -367,26 +367,49 @@ update-path profile (`outputs/tless_update_path_profile.json`) · decision log
 
 ---
 
-## Milestone 6a — Epsilon: uncertainty-driven next-best-view *(stretch)*
+## Milestone 6a — Epsilon: uncertainty-driven next-best-view *(stretch)* ✅ (exit criterion not met)
 
-**Weeks 13–14 · 2026-12-07 → 2026-12-20 · A9 · answers RQ-E**
+**Weeks 13–14 · 2026-12-07 → 2026-12-20 · A9 · answers RQ-E · started 2026-09-19 · closed 2026-09-23**
 
 Attempted only if Delta closed on time. Shares the two-week window with Deployment; pick the one with
 the better expected story for the report (Epsilon by default — it is laptop-only and produces a figure).
+*Started 2026-09-19 on the GPU machine (CPU only) straight after Delta (E1).*
 
 ### Tasks
-- [ ] `binposert/active/`: NBV score over the Scene's real, not-yet-used Views — `U(v)` = mean pairwise
+- [x] `binposert/active/`: NBV score over the Scene's real, not-yet-used Views — `U(v)` = mean pairwise
       silhouette disagreement of the top-K aligned hypotheses rendered into `v`, `V(v)` = predicted visible
-      fraction (D14)
-- [ ] Loop: 1 View → fuse → Verdict; on `request_view` unlock argmax; repeat until accept / reject / exhaustion
-- [ ] Baselines: fixed-1, fixed-2, fixed-all, random-next
-- [ ] Synthetic test: disagreement in one view → that view wins
-- [ ] `configs/experiments/A9.yaml`; AR-vs-views-used curve, NBV vs random-next, on XYZ-IBD
-- [ ] Simulated pick: `T_robot_gripper = T_robot_world @ T_world_object @ T_object_gripper` with a
-      hand-authored grasp pose per ObjectModel, visualised in Open3D (`binposert/viz/`)
+      fraction (D14) — *the hypothesis set is the aligned members plus posterior samples of the fused
+      pose (E3); the score weights tracks by `1 − Confidence` or its entropy (E4, E10)*
+- [x] Loop: 1 View → fuse → Verdict; on `request_view` unlock argmax; repeat until accept / reject / exhaustion
+      (`binposert/active/loop.py`, the `nbv` stage; E8)
+- [x] Baselines: fixed-1, fixed-2, fixed-all, random-next — *plus a GT-scored `oracle` as the ceiling (E11)*
+- [x] Synthetic test: disagreement in one view → that view wins (`tests/test_active.py`: the View across
+      the observing ray beats the View along it; occlusion lowers `V`; symmetric members do not disagree)
+- [x] `configs/experiment/A9.yaml`; AR-vs-views-used curve, NBV vs random-next, on XYZ-IBD (all four
+      start groups, 60 episodes) and T-LESS (start group 0, 20 episodes) — `tools/run_epsilon.sh`,
+      `tools/nbv_report.py`, verified by `tools/check_epsilon.py` (0 failures)
+- [x] Simulated pick: `T_robot_gripper = T_robot_world @ T_world_object @ T_object_gripper` with a
+      hand-authored grasp pose per ObjectModel, visualised in Open3D (`binposert/viz/grasp.py`,
+      `models/grasps/xyzibd.json`, `tools/grasp_demo.py`)
 
 ### Exit criterion
 NBV over real views beats random-next on AR-vs-views; grasp transform chain visualised.
+**Met in part** (`docs/results_epsilon.md`): the grasp chain is implemented, tested and drawn.
+**NBV does not beat random next** — on the full run (XYZ-IBD all four start groups, 60 episodes;
+T-LESS group 0, 20 episodes) NBV, random and the strided order lie within one paired 95 % interval
+at every budget on both datasets (XYZ-IBD NBV − random −1.14 / −0.85 / +0.93 pt at 2 / 3 / 4 Views),
+while a GT-scored oracle shows the ceiling is +7 / +9 / +10 pt (T-LESS +13 / +17 / +11): a View's
+worth is the copies the detector finds in it (ρ = 0.71 XYZ-IBD / 0.62 T-LESS with the oracle's
+gain), not its geometry (ρ = 0.04 / 0.10). The Verdict-stopped loop is a worse allocator than a
+fixed budget (D14 as written; §E12). Closed as a negative result with a measured ceiling, not
+re-opened for a different score — RQ-E's answer is "no, and here is why."
+
+### Deliverables
+`binposert/active/` · `nbv` stage · A9 rows (`outputs/runs/A9_*`, 171+ manifests) · AR-vs-views +
+paired-difference figure (`docs/figures/epsilon_xyzibd_curve.png`) · oracle ceiling and its
+correlates · grasp file, pick figure (`docs/figures/epsilon_xyzibd_pick_scene0.png`) · decision log
+`docs/milestone_epsilon_decision.md` (E1–E12) · `tools/check_epsilon.py` (0 failures) ·
+`docs/results_epsilon.md`.
 
 ---
 
@@ -478,4 +501,6 @@ Decided up front so it is not decided under pressure:
 |---|---|
 | 2026-09-12 | Foundations closed. Plan written. |
 | 2026-09-14 | Alpha started on the GPU machine. `binposert/data/` found missing from the Foundations commit (an unanchored `data/` in `.gitignore`); rebuilt from its tests. Pipeline, plugins, adapters, host environments, evaluator parity with bop_toolkit done in one day; CNOS full run started (~4 h), FoundPose / MegaPose rows queued behind it (`tools/run_alpha.sh`). |
+| 2026-09-19 | Epsilon started on the GPU machine from Delta's caches. `nbv` stage (the D14 loop as one stage over in-memory association / fusion / confidence), synthetic tests, A9 rows for start group 0 on XYZ-IBD and T-LESS (NBV, random, strided, entropy-weight ablation, GT oracle, Verdict-stopped loop), grasp chain + Open3D pick figure. |
+| 2026-09-23 | Epsilon closed: XYZ-IBD start groups 1–3 finished (60 episodes total), T-LESS held at group 0 as a cross-check. Confirmed on the full run: NBV, random next and the strided order lie within one paired 95 % interval at every budget on both datasets (exit criterion not met); a GT-scored oracle's ceiling is +7 / +9 / +10 pt (XYZ-IBD) and +13 / +17 / +11 (T-LESS) at 2 / 3 / 4 Views, and its gain correlates 0.71 / 0.62 with the detector's success in the candidate image against 0.04 / 0.10 with the D14 geometric score — a View's worth on these bins is the copies the detector finds in it. The Verdict-stopped loop underperforms a fixed budget. Reported as a negative result with a measured ceiling (E12). |
 | 2026-09-15 | Alpha closed: A0 59.2 / A1 35.4 / A5 48.2 official AR on T-LESS. Evaluator aligned with `eval_bop19_pose` (three protocol deviations fixed), parallel over scenes (25 → 7 min). MegaPose needed a numpy hand-off patch for its forked render workers. Total GPU wall time ≈ 13 h on a Pascal TITAN X. |

@@ -220,9 +220,15 @@ Defined in [`CONTEXT.md`](../CONTEXT.md). Non-negotiable rules:
   an existing View; it never renders an unseen camera. Synthetic free-camera NBV is out of scope.
 - Score: render the top-K aligned hypotheses of an uncertain ObjectTrack into each candidate View;
   `U(v)` = mean pairwise silhouette disagreement, `V(v)` = predicted visible fraction; motion and
-  collision costs are zero. Choose the argmax.
+  collision costs are zero. Choose the argmax. *Epsilon (E3/E4): the caches hold one refined
+  hypothesis per Detection, so the set is the track's aligned members topped up with posterior
+  samples of the FusedPose (0.05 d along the observing ray, 0.02 d across, 10°), and the score is
+  `S(v) = Σ_t (1 − Confidence_t) · U_t(v) · V_t(v)` over every track — `request_view` alone is 3 %
+  of FusedPoses; the Verdict governs stopping, not the score.*
 - Loop: 1 View → fuse → Verdict; on `request_view` unlock the NBV choice; repeat until `accept`,
-  `reject` or exhaustion. Baselines: fixed-1, fixed-2, fixed-all, random-next.
+  `reject` or exhaustion. Baselines: fixed-1, fixed-2, fixed-all, random-next. *Epsilon (E2): an
+  episode is (scene, start View); every policy is scored on the same reference Views (Gamma's
+  strided 4-group of the start), so `fixed` with budget 4 is the A8 k = 4 group.*
 - **Simulated pick** = `T_robot_gripper = T_robot_world @ T_world_object @ T_object_gripper` with a
   hand-authored grasp pose per ObjectModel, visualised in Open3D. No physics simulator unless everything
   else is finished.
@@ -276,6 +282,7 @@ BinPoseRT/
 ├── configs/         config.yaml  dataset/ segmenter/ estimator/ refiner/ fusion/ confidence/ nbv/
 │                    experiment/A0..A9.yaml smoke.yaml  benchmark.yaml   (singular: Hydra groups)
 ├── models/          confidence/<tag>/{model_h,model_f,thresholds}.json + card.md  (fitted, committed; Delta)
+│                    grasps/<dataset>.json  one T_object_gripper per ObjectModel            (Epsilon, D14)
 ├── binposert/       core package (CPU-only imports)
 │   ├── types.py         View, Scene, ObjectModel, SymmetryGroup, Detection, PoseHypothesis,
 │   │                    QualitySignals, ObjectTrack, FusedPose, Verdict            (D7)
@@ -379,7 +386,8 @@ onboarding tool · benchmark scripts (one command per ablation) · results CSV/J
 | 3 Beta | **done 2026-09-16** | T-LESS BOP19 official AR 35.4 → 47.8 (A2, depth init + point-to-plane ICP); robust 47.9, GICP 47.3. Depth initialisation of the translation added (D8); silhouette gate demoted to a signal after a val-scene sweep; renderer made single-threaded (Open3D parallel raycast corrupts under load). 71 tests, < 60 s; CPU only, from Alpha's caches |
 | 4 Gamma | **done 2026-09-17** | Multi-view association + fusion (D10) on T-LESS and XYZ-IBD val. T-LESS BOP19 AR core/official, 1 → 4 fused views (mean): 50.9/51.1 → 63.9/64.2 → 69.2/69.5 → 72.3/72.5; XYZ-IBD (core, 255 val images, 15 objects × 10–59 copies): 22.6 → 30.9 → 36.5 → 38.3 (best) / 37.3 (mean). Association vs GT instances: T-LESS purity 100 %, completeness 95 %; XYZ-IBD purity 89–93 %, completeness 86–89 % (stacked copies < 0.5 d apart). Joint ICP polish below or equal to the mean at every k on both datasets — D10 step 4 dropped from the default. Extrinsic sweep: 2 mm / 0.25° costs < 2 pt (T-LESS) / 0.5 pt (XYZ-IBD). Depth↔RGB offset estimated GT-free (T-LESS −3.3 px → +3.3 AR single view; XYZ-IBD 0). `multiview/`, `associate`/`fuse` stages, A6/A7, per-camera dataset views, `check_gamma.py`; 97 tests, < 60 s |
 | 5 Delta | **done 2026-09-19** | ConfidenceModels H / F (D11) on T-LESS + XYZ-IBD: logistic on the versioned schema, fitted on 8 val scenes, Platt-recalibrated out of fold. Held-out ROC-AUC 91.1 / 92.4 (F rises 90 → 96 with 1 → 4 views on T-LESS), Brier 0.127 / 0.112, ECE 8.1 / 4.5 % (T-LESS F 3.0 %); Verdict bands 89 / 84 % precision held out vs 95 / 90 % targets — the pre-registered val scenes are the easiest (LOSO: 95 / 90 % reachable). Cross-dataset: ranking transfers, calibration does not. `confidence` stage, A8 rows (BOP score = Confidence) and Model-H fusion weights; confident-failure gallery; update-path profile; 109 tests, < 70 s |
-| 6 Stretch | not started | |
+| 6a Epsilon | **closed 2026-09-23** (exit criterion not met) | NBV over real Views as the `nbv` stage (D14 amended by E2–E4); full run (XYZ-IBD all four start groups, 60 episodes; T-LESS group 0, 20 episodes): NBV within one paired interval of random and of the strided order at every budget on both datasets (XYZ-IBD NBV − random −1.14 / −0.85 / +0.93 pt at 2 / 3 / 4 Views) — the exit criterion is not met. GT-oracle ceiling +7.4 / +9.4 / +10.0 pt (XYZ-IBD) / +13.1 / +17.0 / +10.7 (T-LESS); the oracle's gain follows the detector's success in the candidate image (ρ 0.71 / 0.62) not the geometric score (ρ 0.04 / 0.10). The Verdict-stopped loop underperforms a fixed budget. Grasp chain + Open3D pick figure met. Reported as a negative result with a measured ceiling (E12); 124 tests |
+| 6b Deployment | not started | |
 
 ## Change log
 - 2026-09-12 — initial record, D1–D19.
@@ -459,3 +467,29 @@ onboarding tool · benchmark scripts (one command per ablation) · results CSV/J
   twice on a flipped index bit). Tables: `docs/results_delta.md`.
   **Scope frozen** at this gate (MILESTONES week 12; 2026-09-19): the must-have list (Foundations → Delta) is
   complete; Epsilon and Deployment stay stretch, Finalisation is next, nothing new enters must-have.
+- 2026-09-19 — Epsilon started (E1–E12 in `docs/milestone_epsilon_decision.md`); D14 amended from
+  evidence, D18 gains `models/grasps/`. (1) *Hypothesis set*: the caches hold one refined hypothesis
+  per Detection, so the D14 "top-K" is the track's aligned members topped up with posterior samples
+  of the fused pose (0.05 d along the observing ray, 0.02 d across, 10°). (2) *Score*: every track,
+  weighted by `1 − Confidence` (or its entropy, E10); `request_view` is 3 % of tracks and governs only
+  the stopping rule. (3) *Protocol*: an episode is (scene, start View), every policy scored on the same
+  reference Views (Gamma's strided 4-group), so `fixed` with budget 4 reproduces A8 k = 4 per GT.
+  (4) *Finding, start group 0*: NBV, random next and the strided order lie within one paired 95 %
+  interval at every budget on XYZ-IBD and T-LESS; a GT-scored oracle gains +5 / +7 / +10 pt at 2 / 3 / 4
+  Views (T-LESS +13 at two), and its gain follows the detector's per-image success (ρ 0.69), not the
+  geometric score (ρ 0.09) — on these bins a View is worth the copies CNOS finds in it. The
+  Verdict-stopped loop with the published thresholds stops 8 of 15 scenes at one View and exhausts
+  2; 3.9 Views for 32.8 AR, below fixed-2. The exit criterion is not met on group 0; groups 1–3 are
+  queued.
+- 2026-09-23 — Epsilon closed (E12 final): XYZ-IBD start groups 1–3 completed (60 episodes total,
+  6 384 GT), T-LESS held at group 0 (20 episodes) as a cross-check dataset. The full run confirms
+  group 0's reading rather than reversing it: NBV − random spans zero at every budget on both
+  datasets (XYZ-IBD −1.14 / −0.85 / +0.93 pt at 2 / 3 / 4 Views, 95 % interval); the GT-scored
+  oracle's ceiling holds at +7.4 / +9.4 / +10.0 pt (XYZ-IBD) and +13.1 / +17.0 / +10.7 (T-LESS);
+  the oracle's per-candidate gain correlates 0.71 / 0.62 with the detector's success in the
+  candidate image and 0.04 / 0.10 with the D14 geometric score on 60 / 20 episodes (was 0.69 / 0.09
+  on 15). The Verdict-stopped loop is confirmed worse than a fixed budget (XYZ-IBD: ~4.0 Views for
+  31–32 AR vs the fixed row's 39.1 at the same View count). Closed with the exit criterion not met;
+  reported as RQ-E's answer — a View's worth on these bins is the copies the detector finds in it,
+  not resolvable pose ambiguity, and no geometry-only score can see that before the image is taken.
+  Next: Finalisation.

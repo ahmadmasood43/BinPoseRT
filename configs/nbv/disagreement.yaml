@@ -1,0 +1,24 @@
+# D14: next-best-view over the Scene's real, not-yet-used Views. One episode per scene: the start
+# View is the first image of strided group `start_group`, the reference Views (where every policy
+# is evaluated) are that group's n_reference_views images, the candidates are the scene's other
+# target images. The stage runs associate -> fuse -> confidence itself after every unlocked View,
+# with the multiview / fusion / confidence configs of the row.
+name: disagreement
+version: 1
+params:
+  policy: nbv                  # nbv | random | fixed (the strided order = Gamma's groups)
+  budget: 4                    # Views per episode including the start; 0 = the whole pool
+  stop: budget                 # budget | verdict (stop when no track's Verdict is `uncertain`)
+  uncertain: [request_view]
+  start_group: 0
+  n_reference_views: 4
+  seed: 0
+  score:
+    n_samples: 6               # hypothesis set per track: members + posterior samples
+    sigma_ray: 0.05            # x diameter, along the observing camera's ray
+    sigma_lateral: 0.02        # x diameter, across it
+    sigma_rot_deg: 10.0
+    render_scale: 0.25         # silhouettes at a quarter of the View's resolution
+    seed: 0
+    weight: one_minus          # track weight from its Confidence p: one_minus (1 - p) | entropy
+n_workers: 0                   # 0 = half the cores; scenes in parallel processes

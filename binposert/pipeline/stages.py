@@ -61,6 +61,7 @@ STAGE_VERSIONS = {
     "associate": "1",
     "fuse": "1",
     "confidence": "1",
+    "nbv": "1",
     "evaluate": "8",
 }
 
@@ -295,17 +296,43 @@ def confidence_stage(ctx: StageContext, out_dir: Path, upstream: dict[str, Stage
     )
 
 
+def nbv_stage(ctx: StageContext, out_dir: Path, upstream: dict[str, StageRef]) -> None:
+    from binposert.pipeline.nbv_stage import params_from_config, run_nbv
+
+    section = ctx.cfg["nbv"]
+    n_workers = int(section.get("n_workers", 0)) or default_workers()
+    source = upstream.get("refine") or upstream["coarse_pose"]
+    summary = run_nbv(
+        ctx.dataset,
+        source.dir,
+        out_dir,
+        params_from_config(ctx.cfg, ctx.repo_root),
+        n_workers=n_workers,
+    )
+    log.info(
+        "nbv %s (budget %s, stop %s): %d episodes, %.2f views used, choices %s, verdicts %s",
+        summary["policy"],
+        summary["budget"],
+        summary["stop"],
+        summary["n_episodes"],
+        summary["views_used"]["mean"] or float("nan"),
+        summary["choices"],
+        summary["verdicts"],
+    )
+
+
 def evaluate_stage(ctx: StageContext, out_dir: Path, upstream: dict[str, StageRef]) -> None:
     section = ctx.cfg["evaluate"]
     source = (
-        upstream.get("confidence")
+        upstream.get("nbv")
+        or upstream.get("confidence")
         or upstream.get("fuse")
         or upstream.get("refine")
         or upstream["coarse_pose"]
     )
     table = read_hypotheses_table(source.dir)
     images: set[tuple[int, int]] | None = None
-    if source.stage in ("fuse", "confidence"):
+    if source.stage in ("fuse", "confidence", "nbv"):
         # multi-view rows are scored on the images of their view groups only
         from binposert.pipeline.multiview_stage import GROUPS_FILE
 
@@ -448,6 +475,7 @@ STAGES: dict[str, StageFn] = {
     "associate": associate_stage,
     "fuse": fuse_stage,
     "confidence": confidence_stage,
+    "nbv": nbv_stage,
     "evaluate": evaluate_stage,
 }
 
@@ -458,7 +486,8 @@ STAGE_INPUTS: dict[str, list[str]] = {
     "associate": ["coarse_pose", "refine"],
     "fuse": ["segment", "associate"],
     "confidence": ["associate", "fuse"],
-    "evaluate": ["coarse_pose", "refine", "fuse", "confidence"],
+    "nbv": ["coarse_pose", "refine"],
+    "evaluate": ["coarse_pose", "refine", "fuse", "confidence", "nbv"],
 }
 
 
@@ -491,6 +520,10 @@ def stage_config(cfg: dict[str, Any], stage: str, repo_root: Path | None = None)
 
         section = hashable_config(cfg["confidence"])
         section = {**section, "fingerprints": model_fingerprints(cfg["confidence"], root)}
+    elif stage == "nbv":
+        from binposert.pipeline.nbv_stage import stage_config as nbv_stage_config
+
+        section = nbv_stage_config(cfg, root)
     else:
         section = hashable_config(cfg.get(stage, {}))
     # a depth↔RGB shift in the dataset config changes what every depth-reading stage sees

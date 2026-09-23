@@ -232,8 +232,13 @@ def associate_scene(
     pose_dir: str,
     groups: list[list[int]],
     params: AssociateStageParams,
+    hyps: pd.DataFrame | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    hyps = read_hypotheses_table(pose_dir)
+    """Rows of ``tracks.parquet`` for one scene's view groups, plus association statistics.
+    ``hyps`` (the pose stage's table, any scenes) saves re-reading it per call — the NBV loop
+    (D14) associates the same scene once per unlocked View."""
+    if hyps is None:
+        hyps = read_hypotheses_table(pose_dir)
     hyps = hyps[hyps.scene_id == scene_id]
     models = {oid: dataset.load_model(oid) for oid in sorted(hyps.object_id.unique())}
     weights = scene_weights(hyps, dataset, params.weights).to_dict()
@@ -341,7 +346,28 @@ def fuse_scene(
     tracks = tracks[tracks.scene_id == scene_id]
     with open(Path(assoc_dir) / GROUPS_FILE) as f:
         groups: list[list[int]] = json.load(f).get(str(scene_id), [])
-    dets = read_detections_table(seg_dir) if params.joint_icp is not None else None
+    return fuse_tracks(scene_id, dataset, tracks, groups, params, seg_dir=seg_dir)
+
+
+def fuse_tracks(
+    scene_id: int,
+    dataset: BopDataset,
+    tracks: pd.DataFrame,
+    groups: list[list[int]],
+    params: FuseStageParams,
+    seg_dir: str | None = None,
+    project_images: list[list[int]] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Fuse one scene's ``tracks`` (rows of ``tracks.parquet``, grouped by ``group_id``) into
+    FusedPoses and project them: by default into the group's own Views (or the members' Views,
+    per ``params.project_to``); with ``project_images`` (one list per group) into those Views
+    instead — the NBV loop (D14) scores every policy on the same reference Views regardless of
+    which Views it unlocked. The joint polish needs ``seg_dir`` for the Detection masks."""
+    dets = None
+    if params.joint_icp is not None:
+        if seg_dir is None:
+            raise ValueError("the joint ICP polish needs seg_dir for the Detection masks")
+        dets = read_detections_table(seg_dir)
     fused_rows: list[dict[str, Any]] = []
     hyp_rows: list[dict[str, Any]] = []
     refiners: dict[int, JointRefiner] = {}
@@ -395,7 +421,7 @@ def fuse_scene(
                     ]
                     if len(d_row) == 0:
                         continue
-                    pairs.append((v, load_mask(seg_dir, str(d_row.iloc[0]["mask_path"]))))
+                    pairs.append((v, load_mask(str(seg_dir), str(d_row.iloc[0]["mask_path"]))))
                 jo = refiners[object_id].polish(T_fused, pairs)
                 T_fused = jo.T_world_object
                 signals = _with_joint_signals(signals, jo)
@@ -444,11 +470,12 @@ def fuse_scene(
                 if len(members_df)
                 else 0.0
             )
-            targets = (
-                image_ids
-                if params.project_to == "all"
-                else [int(m.hypothesis.camera_id) for m in members]
-            )
+            if project_images is not None:
+                targets = list(project_images[group_id])
+            elif params.project_to == "all":
+                targets = image_ids
+            else:
+                targets = [int(m.hypothesis.camera_id) for m in members]
             for image_id in targets:
                 v = view(image_id, with_depth=False)
                 cid = v.camera_id
@@ -548,7 +575,9 @@ __all__ = [
     "FuseStageParams",
     "GroupParams",
     "associate_params_from_config",
+    "associate_scene",
     "fuse_params_from_config",
+    "fuse_tracks",
     "make_groups",
     "run_associate",
     "run_fuse",
