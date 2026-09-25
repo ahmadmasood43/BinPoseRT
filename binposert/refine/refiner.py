@@ -17,12 +17,14 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import numpy.typing as npt
+import open3d as o3d
 
 from binposert.refine.cloud import scene_cloud
 from binposert.refine.crop import visible_model_cloud
 from binposert.refine.depth_init import translation_from_depth
-from binposert.refine.gate import GateDecision, GateParams, check_gate, visible_silhouette
+from binposert.refine.gate import GateDecision, GateParams, check_gate
 from binposert.refine.icp import RegistrationResult, register
+from binposert.refine.roi import Roi
 from binposert.render import MeshRenderer
 from binposert.transforms import Mat4
 from binposert.types import ObjectModel, PoseHypothesis, QualitySignals, Stage, View
@@ -43,6 +45,8 @@ class RefinerParams:
     z_init: str = "median_depth"  # "none" | "median_depth": translation initialised from depth
     z_init_min_overlap: int = 50  # rendered-silhouette ∩ mask pixels needed for the initialisation
     gate: GateParams = field(default_factory=GateParams)
+    roi: str = "none"            # "none" | "bbox": Class-B ROI crop (F1); hash from YAML only
+    roi_margin_px: int = 8       # extra padding around the ROI bounding box
 
 
 @dataclass(frozen=True)
@@ -56,6 +60,7 @@ class RefineOutcome:
     n_scene_points: int
     depth_coverage: float
     seconds: float
+    roi_fallback: int = 0   # number of renders that fell back to full frame because pose left ROI
 
 
 class Refiner:
@@ -79,20 +84,40 @@ class Refiner:
         if view.depth is None:
             return self._rejected(hyp, T_coarse, None, None, 0, 0.0, "no_depth", t0)
 
-        render_c = self.renderer.render(T_coarse, view.K, size)
+        # Build ROI from detection-mask bbox ∪ projected sphere; use full frame when roi="none".
+        if p.roi == "bbox":
+            roi: Roi | None = Roi.from_mask_and_sphere(
+                det_mask, T_coarse, view.K, d, size,
+                dilate_px=p.mask_dilate_px + p.erode_px + 1,
+                margin_px=p.roi_margin_px,
+            )
+            K_use = roi.K_shifted(view.K)
+            depth_use = roi.crop(view.depth)
+            mask_use = roi.crop(det_mask)
+            size_use = roi.size
+        elif p.roi == "none":
+            roi = None
+            K_use = view.K
+            depth_use = view.depth
+            mask_use = det_mask
+            size_use = size
+        else:
+            raise ValueError(f"unknown roi {p.roi!r}; choose 'none' or 'bbox'")
+
+        render_c = self.renderer.render(T_coarse, K_use, size_use)
         T_start, z_shift, n_overlap = T_coarse.copy(), 0.0, 0
         if p.z_init == "median_depth":
             T_start, z_shift, n_overlap = translation_from_depth(
-                render_c, view.depth, det_mask, T_coarse, p.erode_px, p.z_init_min_overlap
+                render_c, depth_use, mask_use, T_coarse, p.erode_px, p.z_init_min_overlap
             )
         elif p.z_init != "none":
             raise ValueError(f"unknown z_init {p.z_init!r}")
         self._z = (z_shift, n_overlap)
 
         pts_cam, normals_cam, coverage = scene_cloud(
-            view.depth,
-            view.K,
-            det_mask,
+            depth_use,
+            K_use,
+            mask_use,
             erode_px=p.erode_px,
             z_center_mm=float(T_start[2, 3]),
             z_window_mm=p.z_window_factor * d,
@@ -104,18 +129,32 @@ class Refiner:
 
         T = T_start.copy()
         reg: RegistrationResult | None = None
+        n_fallback = 0
+        # Build scene PointCloud once; pts_cam/normals_cam are identical across ICP levels (F3).
+        src_pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(pts_cam))
+        src_pcd.normals = o3d.utility.Vector3dVector(normals_cam)
         for factor in p.corr_dist_factors:
+            # Per-render ROI fallback: if the pose has moved outside the ROI, use full frame.
+            if roi is not None and not roi.contains_sphere(T, view.K, d):
+                n_fallback += 1
+                K_vmc, size_vmc, mask_vmc = view.K, size, det_mask
+                src_for_reg = None  # must rebuild from full-frame pts_cam if we ever get here
+            else:
+                K_vmc, size_vmc, mask_vmc = K_use, size_use, mask_use
+                src_for_reg = src_pcd
             pts_obj, normals_obj, _ = visible_model_cloud(
                 self.renderer,
                 T,
-                view.K,
-                size,
-                det_mask=det_mask,
+                K_vmc,
+                size_vmc,
+                det_mask=mask_vmc,
                 mask_dilate_px=p.mask_dilate_px,
                 max_points=p.max_model_points,
             )
             if len(pts_obj) < p.min_scene_points:
-                return self._rejected(hyp, T, None, reg, len(pts_cam), coverage, "no_overlap", t0)
+                return self._rejected(
+                    hyp, T, None, reg, len(pts_cam), coverage, "no_overlap", t0, n_fallback
+                )
             reg = register(
                 pts_obj,
                 normals_obj,
@@ -126,18 +165,33 @@ class Refiner:
                 max_corr_dist_mm=factor * d,
                 max_iterations=p.max_iterations,
                 robust_k_mm=p.robust_k_factor * d,
+                src_pcd=src_for_reg,
             )
             if not reg.converged:
-                return self._rejected(hyp, T, None, reg, len(pts_cam), coverage, "icp_failed", t0)
+                return self._rejected(
+                    hyp, T, None, reg, len(pts_cam), coverage, "icp_failed", t0, n_fallback
+                )
             T = reg.T_camera_object
         assert reg is not None
 
-        render_r = self.renderer.render(T, view.K, size)
-        gate = check_gate(
-            T_start, T, self.model, det_mask, render_c, render_r, reg.fitness, p.gate, view.depth
-        )
-        mask_r = visible_silhouette(render_r, view.depth, p.gate.delta_mm)
-        signals = self._signals(hyp.signals, reg, gate, coverage, mask_r, det_mask)
+        # Gate render: use ROI when the final pose still fits, otherwise full frame.
+        if roi is not None and not roi.contains_sphere(T, view.K, d):
+            n_fallback += 1
+            # Re-render coarse at full frame so all three arrays share the same shape.
+            render_c_full = self.renderer.render(T_coarse, view.K, size)
+            render_r = self.renderer.render(T, view.K, size)
+            gate = check_gate(
+                T_start, T, self.model, det_mask, render_c_full, render_r, reg.fitness, p.gate,
+                view.depth,
+            )
+            signals = self._signals(hyp.signals, reg, gate, coverage, gate.mask_refined, det_mask)
+        else:
+            render_r = self.renderer.render(T, K_use, size_use)
+            gate = check_gate(
+                T_start, T, self.model, mask_use, render_c, render_r, reg.fitness, p.gate,
+                depth_use,
+            )
+            signals = self._signals(hyp.signals, reg, gate, coverage, gate.mask_refined, mask_use)
         source = f"{hyp.source}+{p.variant}"
         if gate.accepted:
             out = dataclasses.replace(
@@ -152,7 +206,8 @@ class Refiner:
                 rejection_reason=gate.reason,
             )
         return RefineOutcome(
-            out, T, z_shift, n_overlap, gate, reg, len(pts_cam), coverage, time.perf_counter() - t0
+            out, T, z_shift, n_overlap, gate, reg, len(pts_cam), coverage,
+            time.perf_counter() - t0, n_fallback,
         )
 
     # ------------------------------------------------------------------ helpers
@@ -187,6 +242,7 @@ class Refiner:
         coverage: float,
         reason: str,
         t0: float,
+        roi_fallback: int = 0,
     ) -> RefineOutcome:
         s = dataclasses.replace(hyp.signals)
         s.depth_coverage = coverage
@@ -210,4 +266,5 @@ class Refiner:
             n_scene,
             coverage,
             time.perf_counter() - t0,
+            roi_fallback,
         )

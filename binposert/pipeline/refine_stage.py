@@ -112,6 +112,7 @@ def refine_scene(
                 "depth_coverage": out.depth_coverage,
                 "z_shift_mm": out.z_shift_mm,
                 "z_init_overlap": out.z_init_overlap,
+                "roi_fallback": out.roi_fallback,
                 "seconds": out.seconds,
             }
             det.update(

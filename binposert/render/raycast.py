@@ -132,8 +132,10 @@ class MeshRenderer:
         dirs_cam = dirs_obj @ R.T
         depth = np.where(hit, t_hit * dirs_cam[..., 2], 0.0)
         normals_cam = normals_obj @ R.T
-        # orient normals toward the camera
-        flip = np.sum(normals_cam * dirs_cam, axis=-1) > 0
+        # orient normals toward the camera; non-hit pixels are zeroed below, so restrict the
+        # dot product to hit pixels only (~4 % of the frame on T-LESS) — bit-identical (F7).
+        flip = np.zeros(hit.shape, dtype=bool)
+        flip[hit] = (normals_cam[hit] * dirs_cam[hit]).sum(-1) > 0
         normals_cam[flip] *= -1.0
         normals_cam[~hit] = 0.0
         prim[~hit] = -1

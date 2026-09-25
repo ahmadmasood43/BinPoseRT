@@ -303,39 +303,47 @@ FoundPose alone, with no evidence a model should trust.
 
 ## 8. Update-path profile
 
+> **Correction 2026-09-23 (Deployment milestone, P9).** The Δ16 profile table below was collected
+> with `cProfile.enable()/disable()` called per hypothesis inside a tight loop. Python's call-event
+> hook does not fire reliably for the outermost frame in that pattern, so `MeshRenderer.render` and
+> its callee chain (`_render_once`, `_cast_checked`) never appeared in the cumulative table; the
+> percentage breakdown attributed the missing render time to ICP. The profiler has been fixed
+> (bracket moved outside the inner loop; wall-clock wrappers added for render and ICP), and the
+> corrected numbers replace the original ones below. The original JSON is archived; the stored
+> `outputs/tless_update_path_profile.json` is the corrected version.
+
 `tools/profile_update_path.py --dataset tless --row A8_k4` with `OMP_NUM_THREADS=1` (D13's batch-1
-protocol) on the quiet GPU machine (load 4.5, 16-core host, Python only): 65 four-view groups, 5
-warm-up, 10 under cProfile, 50 timed (580 tracks, 1 049 refined hypotheses). Wall-clock per stage,
-attributed per ObjectTrack (`outputs/tless_update_path_profile.json`):
+protocol) on the GPU machine (load avg 0.19 at start, 16-core host, Python only): 65 four-view
+groups, 5 warm-up, 8 under cProfile, 52 timed (674 tracks, 1 235 refined hypotheses). Wall-clock
+per stage, attributed per ObjectTrack (`outputs/tless_update_path_profile.json`):
 
 | stage | unit | median | p90 | p95 |
 |---|---|---|---|---|
-| `refine` (depth init + 3-level point-to-plane ICP + gate) | per hypothesis | 285 ms | 323 ms | 331 ms |
-| `associate` | per track (group time / tracks) | 1.6 ms | 3.6 ms | 4.3 ms |
-| `fuse` (symmetry alignment + SE(3) mean) | per track | 2.5 ms | 21.9 ms | 28.6 ms |
-| `confidence` (Model H on members + Model F) | per track | 1.7 ms | 2.5 ms | 2.6 ms |
-| **update path** (refine of the members + the three) | per track | **505 ms** | 672 ms | **739 ms** |
+| `refine` (depth init + 3-level point-to-plane ICP + gate) | per hypothesis | 267 ms | 301 ms | 307 ms |
+| `associate` | per track (group time / tracks) | 0.7 ms | 3.0 ms | 3.7 ms |
+| `fuse` (symmetry alignment + SE(3) mean) | per track | 2.1 ms | 19.5 ms | 21.9 ms |
+| `confidence` (Model H on members + Model F) | per track | 1.6 ms | 2.4 ms | 2.7 ms |
+| **update path** (refine of the members + the three) | per track | **471 ms** | 711 ms | **745 ms** |
 
 The target is p95 < 200 ms in Python (D13). The path is 3.7× over it, and 95 % of it is the
-refinement: a track of a 4-view group refines 1.8 hypotheses on average at 0.28 s each. Where the
-refine time goes (cProfile over 303 hypotheses, `profile_refine_top` in the JSON):
+refinement: a track of a 4-view group refines 1.8 hypotheses on average at 0.27 s each. Where the
+refine time goes (wall-clock wrappers on render and ICP inside the profiling script; each callee
+timed on the same samples that produce the per-hypothesis median):
 
-| share | where | note |
-|---|---|---|
-| 49 % | Open3D `registration_icp` (3 coarse-to-fine calls of ≤ 30 iterations on ≤ 3 000 + 3 000 points) | already C++ |
-| 20 % | `numpy` reductions (`sum` over full-resolution masks / depth, 5 ms each) | Python-side, avoidable |
-| 8 % | `create_rays_pinhole` — the ray grid is rebuilt for every render (5 per hypothesis) | cacheable per (K, size) |
-| 13 % | `asarray` / `astype` conversions between Open3D tensors and numpy | Python-side |
-| 5 % | gate: silhouette render, distance transform, symmetry-aware rotation distance (27 `Rotation.from_matrix` per call) | vectorisable |
+| share | where | wall-clock | note |
+|---|---|---|---|
+| **67 %** | `MeshRenderer.render` — 5 renders per hypothesis (1× coarse, 3× ICP-level crops, 1× gate) | 35.5 ms/render × 5 = 177 ms | render-bound; ROI crop is the primary lever |
+| **25 %** | Open3D `registration_icp` (3 coarse-to-fine calls of ≤ 30 iterations on ≤ 3 000 + 3 000 points) | 22 ms/call × 3 = 66 ms | already C++; schedule sweep is the lever |
+| **9 %** | gate, scene cloud, depth init, numpy bookkeeping | ~23 ms | vectorisable (F4, F5, F7) |
 
-Half of the refine time is inside Open3D's registration, which no C++ port of *this* code can
-speed up; the other half is Python-side bookkeeping around it and is worth at most a 2× cut
-(≈ 0.15 s per hypothesis, ≈ 0.3 s p95 per track) — still above the budget. Reaching 200 ms needs
-an algorithmic change: fewer ICP levels / iterations / points (an accuracy–latency Pareto the
-Deployment milestone must measure, the figure D13 requires) or a GPU registration. `associate`,
-`fuse` and `confidence` together are 6 ms median / 36 ms p95 per track and already fit. Under the
-load Delta's rows were running at (8 evaluate workers, load 15–20) the same refine step measured
-1.1 s median (`outputs/tless_update_path_profile.loaded.json`): the latency claim is machine- and
+The refine is **render-bound, not ICP-bound**. `MeshRenderer.render` on a 720×540 T-LESS frame
+takes 35.5 ms; a crop into the detection bbox (median 0.73 % of the frame) takes 3.6 ms — a 15.4×
+speedup. Five renders at 3.6 ms = 18 ms; ICP unchanged = 66 ms; other = 23 ms → estimated 107 ms,
+within the 200 ms budget. The ICP schedule (fewer levels / iterations / points) is a second lever
+for the accuracy–latency Pareto the Deployment milestone must measure. `associate`, `fuse` and
+`confidence` together are 4 ms median / 28 ms p95 per track and already fit. Under load (8
+evaluate workers, load 15–20) the same refine step measured 1.1 s median
+(`outputs/tless_update_path_profile.loaded.json`): the latency claim is machine- and
 load-specific, as ADR-0004 says it must be.
 
 ## Limitations

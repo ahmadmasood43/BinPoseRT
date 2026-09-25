@@ -1,0 +1,46 @@
+# @package _global_
+# A10 — ICP schedule sweep answering RQ-F: what is the accuracy–latency trade-off on the update path?
+#
+# Every A10 row is the A8 chain (CNOS → FoundPose → pt2plane → associate → fuse → confidence) at k=4
+# views, so the AR y-axis is directly comparable to A8_k4 (official 75.9 AR).  The sweep is a
+# **coordinate sweep** from the default schedule (L=3/I=30/P=3000), not a product, so ~12 rows ≈ 3 h.
+#
+# Named rows (all run via `python tools/run.py experiment=A10 experiment.row=<name>`):
+#
+#   A10_exact        — roi=none, default schedule (reference; must reproduce A8_k4 per-GT errors)
+#   A10_l3_i30_p3000 — roi=bbox, default schedule (cost of ROI fix alone in AR, no schedule change)
+#   A10_l2_i30_p3000 — roi=bbox, corr_dist_factors=[0.15,0.04] (drop middle level)
+#   A10_l1_i30_p3000 — roi=bbox, corr_dist_factors=[0.10] (single level)
+#   A10_l3_i15_p3000 — roi=bbox, max_iterations=15
+#   A10_l3_i8_p3000  — roi=bbox, max_iterations=8
+#   A10_l3_i30_p1500 — roi=bbox, max_model_points=max_scene_points=1500
+#   A10_l3_i30_p750  — roi=bbox, max_model_points=max_scene_points=750
+#   A10_l2_i15_p1500 — roi=bbox, combination (promising direction)
+#   A10_l1_i15_p1500 — roi=bbox, aggressive combination
+#   A10_l1_i8_p750   — roi=bbox, fastest frontier point
+#   A10_l1_i15_p750  — roi=bbox, fast frontier; control row: evaluate.score_signal=pose_score
+#
+# The last row separates "geometry worse" from "confidence ranking worse" (see plan §Phase 4).
+#
+# Usage:
+#   uv run python tools/run.py experiment=A10 experiment.row=A10_exact multiview.k=4
+#   uv run python tools/run.py experiment=A10 experiment.row=A10_l3_i30_p3000 multiview.k=4
+#
+# Benchmark (after all sweep rows finish, serially):
+#   uv run python tools/benchmark.py --dataset tless --row <name>
+
+defaults:
+  - override /segmenter: cnos
+  - override /estimator: foundpose
+  - override /refiner: pt2plane
+  - override /multiview: strided
+  - override /fusion: mean
+  - override /confidence: logistic
+
+experiment:
+  name: A10
+  question: "what is the accuracy–latency trade-off on the update path? (RQ-F)"
+  row: A10_exact  # override on the command line: experiment.row=<name>
+stages: [segment, coarse_pose, refine, associate, fuse, confidence, evaluate]
+evaluate:
+  score_signal: confidence

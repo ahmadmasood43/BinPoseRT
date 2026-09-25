@@ -14,3 +14,9 @@ already exposes ICP/GICP/raycasting in C++ under a Python API. Making the C++ wo
 
 **Consequences:** `cpp/` does not exist until after Delta; every Python geometry function must have a
 stable signature that a compiled implementation can satisfy; CUDA kernels are not planned.
+
+**2026-09-23 Deployment status note.** After the Class A + ROI Python fixes (F1/F3/F4/F5/F5b/F7),
+the two remaining hot paths — `registration_icp` (~66 ms) and `cast_rays` (~18 ms × 5 renders) —
+are **already C++ inside Open3D**. No Python hot spot survives the fixes. The precondition of this
+ADR is not met; `cpp/` is not created. This measurement *is* the finding for RQ-F (see
+`docs/milestone_deployment_decision.md` §P1 and the Deployment Pareto figure).

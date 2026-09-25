@@ -62,6 +62,91 @@ from binposert.types import ObjectTrack  # noqa: E402
 STAGES = ["refine", "associate", "fuse", "confidence"]
 
 
+# ---------------------------------------------------------------------------
+# Public generator — imported by tools/benchmark.py
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass as _dataclass  # noqa: E402
+from typing import Iterator  # noqa: E402
+
+
+@_dataclass
+class GroupSample:
+    """Pre-loaded data for one view group, ready for timing.
+
+    Views and masks are loaded outside the iteration body so the caller can
+    start a timer immediately upon receiving the sample.
+    """
+
+    scene_id: int
+    image_ids: list[int]
+    views: dict  # int -> View
+    masks: dict  # (image_id, detection_id) -> np.ndarray[bool]
+    hyps_rows: list  # coarse-hypothesis DataFrame rows (use hypothesis_from_row)
+
+
+def iter_track_samples(
+    dataset: Any,
+    manifest: dict,
+    *,
+    seed: int = 0,
+    max_groups: int | None = None,
+) -> Iterator[GroupSample]:
+    """Yield pre-loaded view-group samples in random order.
+
+    Each sample contains depth views and detection masks already loaded from
+    disk.  The caller is responsible for building Refiner objects (expensive
+    BVH construction) before or during the first encounter of each object_id.
+    Use 50+ warmup groups before recording times so every Refiner is warm.
+
+    Parameters
+    ----------
+    dataset:
+        A BOP dataset object (from ``make_dataset``).
+    manifest:
+        Parsed ``run_manifest.json`` dict from a finished A8 row.
+    seed:
+        RNG seed for the group permutation.
+    max_groups:
+        Upper bound on the number of groups yielded; ``None`` = all groups.
+    """
+    cfg, st = manifest["config"], manifest["stages"]
+    seg_dir = Path(st["segment"]["dir"])
+    pose_dir = Path(st["coarse_pose"]["dir"])
+    assoc_dir = Path(st["associate"]["dir"])
+    groups = json.loads((assoc_dir / GROUPS_FILE).read_text())
+    all_groups = [(int(s), g) for s, gs in groups.items() for g in gs]
+    rng = np.random.default_rng(seed)
+    n = len(all_groups) if max_groups is None else min(max_groups, len(all_groups))
+    pick = rng.choice(len(all_groups), size=n, replace=False)
+    chosen = [all_groups[i] for i in pick]
+    dets = read_detections_table(seg_dir)
+    coarse = read_hypotheses_table(pose_dir)
+    for sid, image_ids in chosen:
+        views: dict = {}
+        masks: dict = {}
+        hyps_rows: list = []
+        for iid in image_ids:
+            v, _ = dataset.load_view(sid, iid, load_rgb=False, load_depth=True)
+            views[iid] = v
+            d_img = (
+                dets[(dets.scene_id == sid) & (dets.image_id == iid)].set_index("detection_id")
+            )
+            h_img = coarse[(coarse.scene_id == sid) & (coarse.image_id == iid)]
+            for _, row in h_img.iterrows():
+                masks[(iid, int(row.detection_id))] = load_mask(
+                    seg_dir, str(d_img.loc[int(row.detection_id), "mask_path"])
+                )
+                hyps_rows.append(row)
+        yield GroupSample(
+            scene_id=sid,
+            image_ids=image_ids,
+            views=views,
+            masks=masks,
+            hyps_rows=hyps_rows,
+        )
+
+
 def pct(x: list[float]) -> dict[str, float]:
     a = np.asarray(x, dtype=float) * 1000.0
     if len(a) == 0:
@@ -71,11 +156,43 @@ def pct(x: list[float]) -> dict[str, float]:
         "median_ms": float(np.median(a)),
         "p90_ms": float(np.percentile(a, 90)),
         "p95_ms": float(np.percentile(a, 95)),
+        "p99_ms": float(np.percentile(a, 99)),
         "mean_ms": float(a.mean()),
     }
 
 
-def main() -> None:
+def main() -> None:  # noqa: C901 (acceptable complexity for a profiling driver)
+    # Wall-clock wrappers installed here so they never affect production imports.
+    # Patching the class method intercepts all MeshRenderer.render calls from any caller
+    # (including visible_model_cloud in crop.py).  Patching refiner.register replaces the name
+    # in that module's globals, so refiner.py's `register(...)` calls go through the wrapper.
+    import binposert.refine.refiner as _refiner_mod
+    from binposert.refine.icp import register as _orig_register
+    from binposert.render.raycast import MeshRenderer as _MR
+
+    _render_wall_timed: list[float] = []
+    _icp_wall_timed: list[float] = []
+    _collect: list[bool] = [False]  # mutable flag; True only for timed (non-profiled) groups
+
+    _orig_mr_render = _MR.render
+
+    def _timed_render(self, T, K, size):  # type: ignore[override]
+        t0 = time.perf_counter()
+        result = _orig_mr_render(self, T, K, size)
+        if _collect[0]:
+            _render_wall_timed.append(time.perf_counter() - t0)
+        return result
+
+    def _timed_register(pts_obj, normals_obj, pts_cam, normals_cam, T, **kw):  # type: ignore[override]
+        t0 = time.perf_counter()
+        result = _orig_register(pts_obj, normals_obj, pts_cam, normals_cam, T, **kw)
+        if _collect[0]:
+            _icp_wall_timed.append(time.perf_counter() - t0)
+        return result
+
+    _MR.render = _timed_render  # type: ignore[method-assign]
+    _refiner_mod.register = _timed_register  # type: ignore[attr-defined]
+
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -99,16 +216,7 @@ def main() -> None:
     )
     cfg, st = manifest["config"], manifest["stages"]
     dataset = make_dataset(cfg, REPO)
-    seg_dir, pose_dir = Path(st["segment"]["dir"]), Path(st["coarse_pose"]["dir"])
-    assoc_dir = Path(st["associate"]["dir"])
-    groups = json.loads((assoc_dir / GROUPS_FILE).read_text())
-    all_groups = [(int(s), g) for s, gs in groups.items() for g in gs]
     load0 = os.getloadavg()
-    rng = np.random.default_rng(args.seed)
-    pick = rng.choice(
-        len(all_groups), size=min(args.n_groups + args.warmup, len(all_groups)), replace=False
-    )
-    chosen = [all_groups[i] for i in pick]
 
     r_params = refine_params(cfg["refiner"])
     a_params = associate_params_from_config(cfg["multiview"], REPO)
@@ -117,42 +225,36 @@ def main() -> None:
         ConfidenceModel.load(c_params.model_h),
         ConfidenceModel.load(c_params.model_f),
     )
-    dets = read_detections_table(seg_dir)
-    coarse = read_hypotheses_table(pose_dir)
     refiners: dict[int, Refiner] = {}
     times: dict[str, list[float]] = {s: [] for s in STAGES}
     per_track_total: list[float] = []
     prof = cProfile.Profile()
     n_tracks_total = 0
-    for gi, (sid, image_ids) in enumerate(chosen):
+    for gi, sample in enumerate(
+        iter_track_samples(
+            dataset, manifest, seed=args.seed, max_groups=args.n_groups + args.warmup
+        )
+    ):
         warm = gi < args.warmup
         profiled = not warm and gi < args.warmup + args.profile_groups
-        # cached inputs: views with depth, masks, coarse hypotheses
-        views, masks, hyps_rows = {}, {}, []
-        for iid in image_ids:
-            v, _ = dataset.load_view(sid, iid, load_rgb=False, load_depth=True)
-            views[iid] = v
-            d_img = dets[(dets.scene_id == sid) & (dets.image_id == iid)].set_index("detection_id")
-            h_img = coarse[(coarse.scene_id == sid) & (coarse.image_id == iid)]
-            for _, row in h_img.iterrows():
-                masks[(iid, int(row.detection_id))] = load_mask(
-                    seg_dir, str(d_img.loc[int(row.detection_id), "mask_path"])
-                )
-                hyps_rows.append(row)
+        sid, image_ids = sample.scene_id, sample.image_ids
+        views, masks, hyps_rows = sample.views, sample.masks, sample.hyps_rows
         # refine, per hypothesis
         refined_rows = []
         t_refine_group = 0.0
+        # cProfile bracket wraps the ENTIRE hypothesis loop so Refiner.refine appears in the
+        # call tree (per-call enable/disable fails to record the outermost Python frame).
+        # Wall-clock collect flag is set only for timed groups (no profiler overhead).
+        _collect[0] = not warm and not profiled
+        if profiled:
+            prof.enable()
         for row in hyps_rows:
             hyp = hypothesis_from_row(row)
             if hyp.object_id not in refiners:
                 refiners[hyp.object_id] = Refiner(dataset.load_model(hyp.object_id), r_params)
             iid = int(row.image_id)
             t0 = time.perf_counter()
-            if profiled:
-                prof.enable()
             out = refiners[hyp.object_id].refine(views[iid], masks[(iid, hyp.detection_id)], hyp)
-            if profiled:
-                prof.disable()
             dt = time.perf_counter() - t0
             t_refine_group += dt
             if not warm and not profiled:
@@ -160,6 +262,9 @@ def main() -> None:
             r = dict(row)
             r.update(hypothesis_to_row(HypothesisRecord(sid, iid, out.hypothesis, dt)))
             refined_rows.append(r)
+        if profiled:
+            prof.disable()
+        _collect[0] = False
         refined = pd.DataFrame(refined_rows)
         models = {int(o): dataset.load_model(int(o)) for o in refined.object_id.unique()}
         # associate, per group
@@ -231,17 +336,21 @@ def main() -> None:
             )
             n_tracks_total += n_tracks
         print(
-            f"group {gi + 1}/{len(chosen)} scene {sid} views {image_ids}: {len(hyps_rows)} hyps, "
+            f"group {gi + 1} scene {sid} views {image_ids}: {len(hyps_rows)} hyps, "
             f"{n_tracks} tracks, refine {t_refine_group:.2f} s, assoc {t_assoc * 1000:.0f} ms, "
             f"fuse {t_fuse_group * 1000:.0f} ms, conf {t_conf * 1000:.0f} ms"
             + (" (warm-up)" if warm else " (profiled)" if profiled else "")
         )
+    # Restore monkey-patches before any further imports or tests can observe them.
+    _MR.render = _orig_mr_render  # type: ignore[method-assign]
+    _refiner_mod.register = _orig_register  # type: ignore[attr-defined]
+
     s = io.StringIO()
-    pstats.Stats(prof, stream=s).sort_stats("cumulative").print_stats(25)
+    pstats.Stats(prof, stream=s).sort_stats("cumulative").print_stats(30)
     result = {
         "dataset": args.dataset,
         "row": args.row,
-        "n_groups": len(chosen) - args.warmup - args.profile_groups,
+        "n_groups": max(0, gi + 1 - args.warmup - args.profile_groups),
         "n_profiled_groups": args.profile_groups,
         "n_tracks": n_tracks_total,
         "single_threaded": os.environ.get("OMP_NUM_THREADS") == "1",
@@ -249,6 +358,16 @@ def main() -> None:
         "per_stage_ms": {k: pct(v) for k, v in times.items()},
         "per_track_total_ms": pct(per_track_total),
         "per_hypothesis_refine_ms": pct(times["refine"]),
+        "per_callee_wall_ms": {
+            "render": pct(_render_wall_timed),
+            "icp": pct(_icp_wall_timed),
+            "n_renders_per_refine": (
+                round(len(_render_wall_timed) / max(1, len(times["refine"])), 2)
+            ),
+            "n_icp_per_refine": (
+                round(len(_icp_wall_timed) / max(1, len(times["refine"])), 2)
+            ),
+        },
         "target_p95_ms": 200.0,
         "profile_refine_top": s.getvalue(),
     }

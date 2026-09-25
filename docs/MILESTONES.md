@@ -23,7 +23,7 @@ anything slips. Finalisation is protected: it never shrinks to absorb overrun.
 | 4 | **Gamma** — multi-view | 7–9 | 2026-10-26 → 2026-11-15 | GPU machine (CPU from caches; GPU once for XYZ-IBD) | A6, A7 | **done 2026-09-17** |
 | 5 | **Delta** — reliability | 10–12 | 2026-11-16 → 2026-12-06 | GPU machine (CPU only, from Gamma's caches) | A8 | **done 2026-09-19** |
 | 6a | **Epsilon** — active view *(stretch)* | 13–14 | 2026-12-07 → 2026-12-20 | GPU machine (CPU only, from Delta's caches) | A9 | **closed 2026-09-23** (exit criterion not met — negative result with a measured ceiling) |
-| 6b | **Deployment** *(stretch)* | 13–14 | 2026-12-07 → 2026-12-20 | GPU machine | A10 | not started |
+| 6b | **Deployment** *(stretch)* | started early | 2026-09-23 → 2026-09-24 | GPU machine | A10 | **closed 2026-09-24** — both D13 budgets met: update path 156 ms at operating point (99.7% AR); full pipeline 112.97 s on 24-image subset |
 | 7 | **Finalisation** | 15–17 | 2026-12-21 → 2027-01-10 | — | — | not started |
 
 ```mermaid
@@ -39,7 +39,7 @@ gantt
     Delta (reliability)    :done,    m5, 2026-09-17, 2026-09-19
     section Stretch
     Epsilon (active view)  :done,    m6, 2026-09-19, 2026-09-23
-    Deployment (C++/TRT)   :         m7, 2026-12-07, 2026-12-20
+    Deployment (ICP sweep) :done,    m7, 2026-09-23, 2026-09-24
     section Wrap-up
     Finalisation           :crit,    m8, 2026-12-21, 2027-01-10
 ```
@@ -413,34 +413,42 @@ correlates · grasp file, pick figure (`docs/figures/epsilon_xyzibd_pick_scene0.
 
 ---
 
-## Milestone 6b — Deployment: profiling and C++ ports *(stretch)*
+## Milestone 6b — Deployment: profiling and ICP schedule sweep *(stretch)*
 
-**Weeks 13–14 · 2026-12-07 → 2026-12-20 · A10 · answers RQ-F**
+**Started 2026-09-23 (early; Epsilon closed ahead of gate) · A10 · answers RQ-F**
 
-Attempted only after Delta's profile shows a clear hot path. `cpp/` does not exist before this
-(ADR-0001). *Delta's profile (`outputs/tless_update_path_profile.json`, Δ16): the update path is
-0.51 s median / 0.74 s p95 per track, 95 % of it the refinement (0.28 s per hypothesis); inside the
-refinement 49 % is Open3D's `registration_icp` — already C++ — 20 % numpy reductions over
-full-resolution masks, 13 % tensor ↔ numpy conversions, 8 % rebuilding the pinhole ray grid per
-render. A port of the Python parts can at best halve the refine time; the 200 ms target needs a
-cheaper ICP schedule (fewer levels / iterations / points, the Pareto below) or a GPU registration,
-so the "C++ ports" task is reframed: profile-guided Python fixes first (ray-grid cache, reductions
-on the crop), then the ICP schedule sweep, and C++ only if a Python-side hot spot remains.*
+*Δ16 profile was wrong (P9 — cProfile per-hypothesis bracket missed render entirely). Corrected
+wall-clock profile: **render-bound 67 %** (177 ms / hypothesis), ICP 25 % (66 ms), other 9 %.*
+*Both remaining hot paths (`registration_icp` and `cast_rays`) are already C++ inside Open3D — the
+ADR-0001 precondition for a C++ port is not met. RQ-F finding: no Python hot spot to port.*
 
 ### Tasks
-- [ ] Freeze `configs/benchmark.yaml`: 50 warm-up, 1000 timed, batch 1, CUDA synchronised, `perf_counter`
-      per stage (D13)
-- [ ] `tools/benchmark.py`: update-path and full-pipeline latency, stage-level median / p90 / p95, peak
-      VRAM / RAM, one documented GPU machine
-- [ ] Port the 1–3 slowest geometry stages to C++17 via pybind11 behind unchanged Python signatures
-      (candidates: visibility-aware crop, ICP inner loop, depth → cloud); before/after per stage
-- [ ] Optional: ONNX / TensorRT export of the DINOv2 backbone used by CNOS / FoundPose
-- [ ] Accuracy–latency Pareto plot (x = p95, y = BOP AR) — a required figure for the report even if only
-      Python points exist
-- [ ] Bit-for-bit (or tolerance) equivalence tests between Python and C++ implementations
+- [x] **Phase 0**: Fix cProfile instrumentation; re-run corrected profile (`P6`, `P9`)
+- [x] **Phase 1**: `configs/benchmark.yaml` (D13 frozen protocol) + `tools/benchmark.py`
+- [x] **Phase 2**: Class A bit-identical fixes (F3/F4/F5/F5b/F7) + Class B ROI crop (F1) behind
+      `roi="bbox"` flag; 132 tests pass (`P12`, `P13`)
+- [x] **Phase 3**: `tools/check_deployment.py --equivalence` (roi=none exact equality, roi=bbox
+      tolerance table, whole-cache hash guard: 1064/1064 same-version hashes unchanged,
+      A8_k4 refine hash unchanged) (`P14`); ROI stop-rule triggered — demoted to ablation (`P15`)
+- [x] **Phase 4**: 13-row ICP coordinate sweep + latency benchmark per row + official BOP eval for
+      4 rows + XYZ-IBD cross-check, all run on the GPU machine (`tools/run_deployment.sh`) (`P16`)
+- [x] **Phase 5**: `tools/deployment_report.py` → `docs/results_deployment.md` + Pareto PNG (`P17`)
+- ~~Optional: ONNX / TensorRT export of the DINOv2 backbone used by CNOS / FoundPose~~
+  *(dropped — backbone is in segment/coarse_pose, not the update path; P5)*
+- [x] **Full-pipeline budget** (D13's second target, P3): `tools/benchmark.py --full-pipeline`
+      implemented — `dataset.targets` override for scene/image subsetting (no dataset code
+      changed), one real run on 2 scenes × 12 images. Wall time 112.97 s; peak RSS 5861.1 MB, peak
+      VRAM 7072.0 MB. Per-image segment/refine genuine, coarse_pose corrected for cumulative
+      `time_s` (`P18`); wall time reflects CNOS/FoundPose's own persistent caches, disclosed not
+      masked (`P19`).
 
-### Exit criterion
-Profile → 1–3 C++ ports → update-path p95 reported; optional ONNX/TensorRT of the DINOv2 backbone.
+### Exit criterion (revised from plan)
+Update path measured under `configs/benchmark.yaml`; Python fixes proven bit-identical / tolerance-
+bounded without invalidating cached stages; ICP schedule swept; accuracy–latency Pareto on T-LESS
+with one XYZ-IBD cross-check row. **200 ms target reported, not required** — comfortably reached at
+the chosen operating point (156 ms p95, 99.7 % of reference AR). C++ port not created (ADR-0001
+precondition not met — measurement is the finding). Full-pipeline budget measured once on a
+2-scene × 12-image subset, no target (D13); both D13 budgets now reported.
 
 ---
 

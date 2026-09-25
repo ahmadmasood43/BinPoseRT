@@ -61,7 +61,7 @@ depth↔RGB offset of the sensor data, to be calibrated without GT in Gamma. CNO
 
 | Dataset | AR (VSD/MSSD/MSPD), single view | Δ from refinement | Δ from depth↔RGB calibration | Δ from fusion (2 / 3 / 4 views) | Δ from Confidence ranking (2 / 3 / 4 views, official) | Update-path p95 (Python) |
 |---|---|---|---|---|---|---|
-| T-LESS | 51.1 (48.0 / 51.4 / 53.2) | +12.4 (35.4 → 47.8) | +3.3 (47.8 → 51.1, GT-free estimate) | +13.1 / +18.4 / **+21.4** (→ 64.2 / 69.5 / 72.5) | +1.1 / +2.6 / **+3.4** (→ 65.3 / 72.1 / 75.9) | **0.74 s** (refine 0.33 s / hyp; associate + fuse + confidence 36 ms; single thread, quiet machine) |
+| T-LESS | 51.1 (48.0 / 51.4 / 53.2) | +12.4 (35.4 → 47.8) | +3.3 (47.8 → 51.1, GT-free estimate) | +13.1 / +18.4 / **+21.4** (→ 64.2 / 69.5 / 72.5) | +1.1 / +2.6 / **+3.4** (→ 65.3 / 72.1 / 75.9) | **0.75 s** (refine 0.27 s / hyp, render-bound 67%; associate + fuse + confidence 28 ms; single thread, quiet machine) |
 | XYZ-IBD (val, core) | 22.6 (20.4 / 23.4 / 23.9) | in the chain | none needed (0 px) | +8.3 / +13.9 / **+15.7** (→ 30.9 / 36.5 / 38.3, best) | +0.3 / +1.0 / **+1.8** (→ 30.6 / 36.8 / 39.1, core) | — |
 
 Gamma (multi-view, [`docs/results_gamma_tless.md`](docs/results_gamma_tless.md)): the depth map of the

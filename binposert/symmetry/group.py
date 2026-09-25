@@ -4,6 +4,8 @@ from typing import Any
 
 import numpy as np
 
+from scipy.spatial.transform import Rotation
+
 from binposert.transforms import Mat4, make_T, rotation_distance_deg, rotvec_T, se3_distance
 from binposert.types import SymmetryGroup
 
@@ -50,17 +52,29 @@ def align_to_reference(T_ref: Mat4, T: Mat4, group: SymmetryGroup) -> tuple[Mat4
     """
     if group.is_trivial:
         return T, 0
-    best_i, best_d, best_T = 0, np.inf, T
-    for i, S in enumerate(group.transforms):
-        TS = T @ S
-        d = se3_distance(T_ref, TS)
-        if d < best_d:
-            best_i, best_d, best_T = i, d, TS
-    return best_T, best_i
+    Ss = group.transforms
+    R_T, t_T = T[:3, :3], T[:3, 3]
+    R_ref_T = T_ref[:3, :3].T
+    t_ref = T_ref[:3, 3]
+    S_Rs = np.stack([S[:3, :3] for S in Ss])              # (n, 3, 3)
+    S_ts = np.stack([S[:3, 3] for S in Ss])               # (n, 3)
+    TS_Rs = np.einsum("ij,njk->nik", R_T, S_Rs)           # (n, 3, 3): R_T @ S_Rs[i]
+    TS_ts = S_ts @ R_T.T + t_T                            # (n, 3): R_T @ S_ts[i] + t_T
+    trans_dists = np.linalg.norm(t_ref - TS_ts, axis=-1)  # (n,)
+    R_diffs = R_ref_T[np.newaxis] @ TS_Rs                 # (n, 3, 3)
+    rot_dists = np.degrees(Rotation.from_matrix(R_diffs).magnitude())  # (n,) single scipy call
+    best_i = int((trans_dists + rot_dists).argmin())
+    TS_best = np.eye(4)
+    TS_best[:3, :3] = TS_Rs[best_i]
+    TS_best[:3, 3] = TS_ts[best_i]
+    return TS_best, best_i
 
 
 def sym_aware_rotation_distance_deg(T_a: Mat4, T_b: Mat4, group: SymmetryGroup) -> float:
-    return min(rotation_distance_deg(T_a, T_b @ S) for S in group.transforms)
+    R_rel = T_a[:3, :3].T @ T_b[:3, :3]
+    S_Rs = np.stack([S[:3, :3] for S in group.transforms])  # (n, 3, 3)
+    R_diffs = R_rel[np.newaxis] @ S_Rs                       # (n, 3, 3): one scipy call (F5)
+    return float(np.degrees(Rotation.from_matrix(R_diffs).magnitude().min()))
 
 
 def sym_aware_se3_distance(T_a: Mat4, T_b: Mat4, group: SymmetryGroup) -> float:

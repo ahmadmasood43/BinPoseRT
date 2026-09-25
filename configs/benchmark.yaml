@@ -1,0 +1,38 @@
+# D13 frozen protocol for update-path and full-pipeline benchmarks.
+# Quoted verbatim into every result JSON by tools/benchmark.py.
+# Keys must not be silently removed — the script enforces every required key.
+
+protocol:
+  warmup_tracks: 50          # track samples discarded before timing starts
+  timed_tracks: 1000         # track samples to record
+  batch: 1                   # one ObjectTrack at a time (ADR-0004's update-path unit)
+  clock: perf_counter
+  cuda_sync: not_applicable  # no CUDA on the update path; full-pipeline adapters use
+                             # BINPOSERT_CUDA_SYNC=1 gated on that env var
+  thread_env:
+    OMP_NUM_THREADS: "1"
+  max_load_average: 2.0      # refuse to start above this 1-min load average
+  percentiles: [50, 90, 95, 99]
+  schema_version: 2          # superset of the Δ16 schema (added p99_ms, per_callee_wall_ms)
+
+update_path:
+  unit: ObjectTrack
+  stages: [refine, associate, fuse, confidence]
+  per_stage_attribution: group_time_divided_by_n_tracks
+  row: A8_k4
+  dataset: tless
+  seed: 0
+  target_p95_ms: 200.0
+
+full_pipeline:
+  subset_scenes: 2
+  subset_images_per_scene: 12
+  # LOAD-BEARING: outputs_root is NOT outputs/ — a subset config that keeps name:tless would alias
+  # the existing caches (stage_config hashes only config sections, not the dataset path), hit
+  # _SUCCESS on every stage and benchmark nothing.  A different root forces fresh stage runs.
+  outputs_root: outputs/bench
+  seed: 42
+
+memory:
+  sample_interval_s: 0.2
+  metrics: [rss_mb, peak_vram_mb]

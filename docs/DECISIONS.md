@@ -493,3 +493,53 @@ onboarding tool · benchmark scripts (one command per ablation) · results CSV/J
   reported as RQ-E's answer — a View's worth on these bins is the copies the detector finds in it,
   not resolvable pose ambiguity, and no geometry-only score can see that before the image is taken.
   Next: Finalisation.
+- 2026-09-23 — Deployment started (P1–P10 in `docs/milestone_deployment_decision.md`). **Correction
+  to Δ16 published numbers (P9):** The `docs/results_delta.md` §8 profile breakdown and the
+  `README.md` update-path latency entry were wrong: the cProfile `enable()/disable()` pattern used
+  per hypothesis caused `MeshRenderer.render` and its call chain to be invisible to the profiler,
+  so the "49 % ICP / 20 % numpy" attribution was shares of the visible half only. The corrected
+  wall-clock profile (outer-loop bracket + monkey-patch wrappers) shows the refine is
+  **render-bound**: 67 % render (177 ms) / 25 % ICP (66 ms) / 9 % other. `docs/results_delta.md`
+  §8 table and profile breakdown updated with a correction header dated 2026-09-23; `README.md`
+  latency column updated from "0.74 s (refine 0.33 s / hyp)" to "0.75 s (refine 0.27 s / hyp,
+  render-bound 67 %)"; `outputs/tless_update_path_profile.json` replaced with the corrected run.
+- 2026-09-23 — Deployment implementation phases complete (P11–P14): Class A + ROI fixes applied
+  (132 tests pass); `tools/benchmark.py`, `tools/check_deployment.py`, `configs/experiment/A10.yaml`,
+  `tools/run_deployment.sh`, `tools/deployment_report.py` created; `configs/benchmark.yaml` frozen.
+  **RQ-F finding (ADR-0001):** After fixes, both remaining hot paths (`registration_icp` ~66 ms,
+  `cast_rays` ~18 ms × 5) are already C++ inside Open3D. No Python hot spot survives; `cpp/` is not
+  created. The ADR-0001 note updated with a dated status note (2026-09-23). The A10 ICP schedule
+  sweep and official BOP eval remain to be run on the GPU machine to complete the Pareto.
+- 2026-09-24 — Deployment closed (P15–P17 in `docs/milestone_deployment_decision.md`). **ICP
+  schedule dominates latency, not the ROI crop:** the 13-row A10 coordinate sweep shows dropping
+  from 3→1 correlation levels and 30→8 iterations costs 0.45 official AR points (0.7337 → 0.7292)
+  while cutting update-path p95 5.4× (605.6 → 111.6 ms). Chosen operating point `A10_l2_i15_p1500`
+  measures 156 ms p95 (22 % margin below the 200 ms target) at 99.7 % of reference AR — the 200 ms
+  target from D13 is comfortably reached, though the accurate configuration (`A10_exact`, 605.6 ms)
+  stays the project default per P2. **ROI crop demoted to ablation** (P15): the pre-committed stop
+  rule fired (2.05 % gate-flip rate, 21 mm max |Δt| vs the 1 %/0.01 mm thresholds) because the ROI's
+  cropped scene cloud loses context when ICP drifts toward the crop boundary; the per-render gate
+  fallback catches the acceptance mismatch but not the ICP divergence itself. Confirmed the
+  confidence-ranking finding from D11 survives out-of-distribution: `A10_l1_i15_p750_posescore`
+  (pose_score signal, cheap schedule) scores 2.87 AR points below the same schedule's confidence-
+  ranked row. **Not met:** the full-pipeline benchmark leg (D13's second budget, P3) was never
+  implemented — `tools/benchmark.py --full-pipeline` is documented in its own docstring but the CLI
+  flag and the dataset scene/image-subsetting it needs do not exist; only the update-path budget is
+  measured. Full tables: `docs/results_deployment.md`; step-by-step log:
+  `docs/milestone_deployment_decision.md` P1–P17. Next: Finalisation, or implement the full-pipeline
+  leg if the second D13 budget is still required before closing the increment.
+- 2026-09-24 — Deployment's full-pipeline budget implemented (P18–P19 in `docs/
+  milestone_deployment_decision.md`, reversing the "not met" note above). `BopDataset` already
+  filters `scene_ids`/`image_ids` by its `targets` file and passes it straight through to the
+  external CNOS/FoundPose CLIs, so a single `dataset.targets=<subset file>` Hydra override
+  restricts a real `tools/run.py` invocation to any scene/image subset with zero code changes to
+  the dataset or any stage. `tools/benchmark.py --full-pipeline` now runs one such invocation
+  (2 scenes × 12 images, seed 42, `outputs_root: outputs/bench`) and reports true end-to-end wall
+  time (112.97 s, segment → evaluate) and whole-process-tree/whole-GPU peak RSS/VRAM (5861.1 MB /
+  7072.0 MB — the update-path leg's PID-matched samplers cannot see the CNOS/FoundPose subprocess
+  tree). Found along the way: `hypotheses.parquet.time_s` is cumulative by design (segment's time
+  plus FoundPose's own marginal cost, for BOP19's one-time-per-image convention) — verified against
+  the full 1000-image A8_k4 run (`coarse_pose.time_s ≥ segment.time_s` for all 1000 images) and
+  corrected before reporting FoundPose's own per-image cost. Both D13 latency budgets are now
+  measured. Full tables: `docs/results_deployment.md`; step-by-step log: `docs/
+  milestone_deployment_decision.md` P1–P19.

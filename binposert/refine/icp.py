@@ -36,6 +36,7 @@ def register(
     max_corr_dist_mm: float = 10.0,
     max_iterations: int = 30,
     robust_k_mm: float = 5.0,
+    src_pcd: "o3d.geometry.PointCloud | None" = None,
 ) -> RegistrationResult:
     """Refine ``T_init`` (``T_camera_object``) by registering the observed camera-frame cloud onto
     the object-frame model cloud.
@@ -54,8 +55,11 @@ def register(
         raise ValueError(f"unknown ICP variant {variant!r}; choose from {VARIANTS}")
     if len(pts_obj) < 10 or len(pts_cam) < 10:
         return RegistrationResult(T_init.copy(), 0.0, float("inf"), 0, False)
-    src = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(pts_cam))
-    src.normals = o3d.utility.Vector3dVector(normals_cam)
+    if src_pcd is None:
+        src = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(pts_cam))
+        src.normals = o3d.utility.Vector3dVector(normals_cam)
+    else:
+        src = src_pcd  # pre-built by caller; pts_cam/normals_cam are identical across ICP levels
     dst = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(pts_obj))
     dst.normals = o3d.utility.Vector3dVector(normals_obj)
     init = invert(T_init)  # T_object_camera moves scene points into the model frame

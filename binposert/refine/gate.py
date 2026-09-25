@@ -7,7 +7,7 @@ another object and is not expected to appear in the (visible) Detection mask."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
@@ -40,6 +40,9 @@ class GateDecision:
     boundary_px: float
     displacement_mm: float
     displacement_deg: float
+    mask_refined: "npt.NDArray[np.bool_] | None" = field(
+        default=None, compare=False, hash=False
+    )
 
 
 def visible_silhouette(
@@ -91,7 +94,7 @@ def check_gate(
     d_t = translation_distance(T_start, T_refined)
     d_r = sym_aware_rotation_distance_deg(T_start, T_refined, model.symmetry)
     reason = gate_reason(fitness, d_t, d_r, iou_c, iou_r, model.diameter, params)
-    return GateDecision(reason is None, reason, iou_c, iou_r, boundary, d_t, d_r)
+    return GateDecision(reason is None, reason, iou_c, iou_r, boundary, d_t, d_r, mask_refined=mask_r)
 
 
 def gate_reason(
